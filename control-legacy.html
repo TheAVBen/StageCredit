@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>StageCredit — Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #2c2b3b; color: #f2f2f2; padding: 20px;
+    user-select: none;
+  }
+  h1 {
+    font-size: 20px; font-weight: 700; color: #f2f2f2; margin-bottom: 2px;
+    letter-spacing: -.01em; text-transform: lowercase;
+  }
+  h1 .tv {
+    color: #ffcc02; font-size: .5em; font-weight: 800;
+    vertical-align: .75em; letter-spacing: 0;
+  }
+  .tagline {
+    font-size: 10px; color: #ffcc02; letter-spacing: .25em;
+    text-transform: uppercase; font-weight: 700; margin-bottom: 16px;
+  }
+  .cols {
+    display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+    gap: 20px; align-items: start;
+  }
+  .preview {
+    background: #111111; border-radius: 12px; text-align: center;
+    padding: 18px 0; margin-bottom: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .preview .time { font-size: 52px; font-weight: 800; color: #f2f2f2; }
+  .preview .cuename {
+    font-size: 11px; color: #9b9aad; text-transform: uppercase;
+    letter-spacing: .15em; font-weight: 700; min-height: 14px;
+  }
+  .preview.warning .time { color: #ffcc02; }
+  .preview.danger .time { color: #ff4d4f; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  input[type="number"], input[type="text"], select {
+    width: 100%; padding: 10px; border: 1px solid #454458; border-radius: 8px;
+    background: #23222f; color: #f2f2f2; font-size: 15px; text-align: center;
+    font-family: inherit;
+  }
+  input[type="text"] { text-align: left; }
+  select { text-align: left; cursor: pointer; }
+  input:focus, select:focus { outline: 2px solid #ffcc02; border-color: #ffcc02; }
+  label {
+    font-size: 10px; color: #9b9aad; display: block; margin-bottom: 5px;
+    text-transform: uppercase; letter-spacing: .15em; font-weight: 700;
+  }
+  button {
+    flex: 1; padding: 12px 8px; border: none; border-radius: 8px;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    background: #454458; color: #f2f2f2;
+    text-transform: uppercase; letter-spacing: .06em; font-family: inherit;
+  }
+  button:hover { filter: brightness(1.15); }
+  button:active { transform: scale(.98); }
+  .start { background: #ffcc02; color: #111111; }
+  .pause { background: #f2f2f2; color: #111111; }
+  .reset { background: #454458; }
+  .quick { background: #23222f; font-size: 12px; }
+  .send { background: #ffcc02; color: #111111; }
+  .clear-on { background: #ff4d4f; color: #fff; }
+  .small { font-size: 10px; padding: 8px; background: #23222f; color: #9b9aad; }
+  input[type="range"] { accent-color: #ffcc02; }
+  hr { border: none; border-top: 1px solid #454458; margin: 16px 0; }
+
+  /* Cue list */
+  #cueList { margin-bottom: 10px; }
+  .cue {
+    display: flex; align-items: center; gap: 8px;
+    background: #23222f; border-radius: 8px; padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .cue.active { outline: 2px solid #ffcc02; }
+  .cue .name {
+    flex: 1; font-size: 13px; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cue .dur { font-size: 13px; color: #9b9aad; font-variant-numeric: tabular-nums; }
+  .cue button { flex: 0 0 auto; padding: 6px 10px; font-size: 11px; }
+  .cue .load { background: #ffcc02; color: #111111; }
+  .cue .clear-on { background: #ff4d4f; color: #fff; }
+  .cue .del { background: transparent; color: #9b9aad; padding: 6px 4px; }
+  .cue .del:hover { color: #ff4d4f; }
+  .empty { font-size: 12px; color: #9b9aad; text-align: center; padding: 6px 0 10px; }
+  input:disabled { opacity: .35; }
+  .cue.draggable { cursor: grab; }
+  .cue.dragging { opacity: .4; }
+  .cue.drag-over { box-shadow: 0 -3px 0 0 #ffcc02; }
+  .cue .grip { color: #9b9aad; font-size: 15px; letter-spacing: 2px; cursor: grab; }
+
+  /* Modals */
+  #customModal, #cueModal, #keysModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+  }
+  #customModal.open, #cueModal.open, #keysModal.open { display: flex; }
+  .keychip {
+    flex: 0 0 auto; min-width: 64px; text-align: center; font-size: 12px;
+    font-weight: 700; background: #111; border: 1px solid #454458;
+    border-radius: 6px; padding: 7px 10px; font-variant-numeric: tabular-nums;
+  }
+  .keychip.listening { border-color: #ffcc02; color: #ffcc02; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 260px; }
+  .swatch {
+    width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #454458;
+  }
+  .swatch.sel { outline: 2px solid #fff; }
+  .swatch.none {
+    background: repeating-linear-gradient(45deg, #23222f, #23222f 4px, #454458 4px, #454458 6px);
+  }
+  .cue .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .cue .edit { background: #454458; padding: 6px 9px; font-size: 11px; }
+  .panel {
+    background: #2c2b3b; border: 1px solid #454458; border-radius: 12px;
+    padding: 22px; width: 540px; max-height: 88vh; overflow: auto;
+  }
+  .panel h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: .2em;
+    text-transform: uppercase; color: #ffcc02; margin-bottom: 14px;
+  }
+  .crow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .crow > label { flex: 1; margin-bottom: 0; }
+  .crow input[type="color"] {
+    flex: 0 0 52px; height: 34px; padding: 2px; border: 1px solid #454458;
+    border-radius: 8px; background: #23222f; cursor: pointer;
+  }
+  .crow input[type="range"] { flex: 0 0 160px; }
+  .crow select, .crow input[type="number"] { flex: 0 0 160px; }
+  .crow input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; accent-color: #ffcc02; }
+  .crow .val { flex: 0 0 44px; font-size: 12px; color: #9b9aad; text-align: right; }
+  .crow input[type="file"] { display: none; }
+  .logo-thumb {
+    flex: 0 0 auto; max-height: 30px; max-width: 90px; border-radius: 4px;
+    background: #111; padding: 2px;
+  }
+
+  #msgList { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+  <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h1>soundcredit<span class="tv">.tv</span></h1>
+      <div class="tagline">StageCredit — Control</div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="small" id="newShowBtn" style="flex:0 0 auto; padding:8px 14px;">New</button>
+      <button class="small" id="saveShowBtn" style="flex:0 0 auto; padding:8px 14px;">Save</button>
+      <button class="small" id="loadShowBtn" style="flex:0 0 auto; padding:8px 14px;">Load</button>
+      <button class="small" id="keysBtn" style="flex:0 0 auto; padding:8px 14px;">Shortcuts</button>
+      <button class="small" id="customBtn" style="flex:0 0 auto; padding:8px 14px;">Customise</button>
+    </div>
+  </div>
+
+  <div class="cols">
+
+    <div class="col-left">
+      <div class="preview" id="preview">
+        <div class="cuename" id="cueName"></div>
+        <div class="time" id="previewTime">10:00</div>
+      </div>
+      <div id="cueNotes" style="display:none; font-size:12px; color:#9b9aad; background:#23222f; border-left:3px solid #ffcc02; padding:8px 10px; margin:-8px 0 16px;"></div>
+
+      <div class="row">
+        <div style="flex:1"><label>Minutes</label><input type="number" id="min" min="0" max="999" value="10"></div>
+        <div style="flex:1"><label>Seconds</label><input type="number" id="sec" min="0" max="59" value="0"></div>
+      </div>
+
+      <div class="row">
+        <button class="start" id="startBtn">Start</button>
+        <button class="reset" id="resetBtn">Reset</button>
+        <button class="quick" id="todBtn" title="Show time of day on the display" style="flex:0 0 64px">TOD</button>
+      </div>
+
+      <div class="row">
+        <button class="quick" data-add="-60">−1 min</button>
+        <button class="quick" data-add="60">+1 min</button>
+        <button class="quick" data-add="300">+5 min</button>
+      </div>
+
+      <hr>
+
+      <label>Clock speed — how fast a "second" is (<span id="speedVal">1.00×</span>)</label>
+      <div class="row">
+        <input type="range" id="speed" min="0.8" max="1.2" step="0.01" value="1" style="flex:1">
+        <button class="quick" id="speedReset" style="flex:0 0 70px">1.00×</button>
+      </div>
+
+      <hr>
+
+      <label>Display output</label>
+      <div class="row">
+        <select id="displaySel"></select>
+      </div>
+      <div class="row">
+        <button class="small" id="fsBtn">Fullscreen on selected</button>
+        <button class="small" id="exitFsBtn">Exit fullscreen</button>
+        <button class="small" id="reopenBtn">Open display</button>
+      </div>
+    </div>
+
+    <div class="col-right">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
+        <label style="margin-bottom:0">Cue list</label>
+        <button class="small" id="reorderBtn" style="flex:0 0 auto; padding:5px 10px;">Reorder</button>
+      </div>
+      <div id="cueList"></div>
+      <div class="row">
+        <input type="text" id="cueNameIn" placeholder="Cue name" style="flex:2">
+        <input type="number" id="cueMin" min="0" max="999" placeholder="mm" style="flex:0 0 60px">
+        <input type="number" id="cueSec" min="0" max="59" placeholder="ss" style="flex:0 0 60px">
+        <button id="addTodBtn" class="quick" title="Make this a time-of-day cue" style="flex:0 0 56px">TOD</button>
+        <button id="addCueBtn" style="flex:0 0 56px">Add</button>
+      </div>
+
+      <hr>
+
+      <label>Message to display</label>
+      <div class="row">
+        <input type="text" id="msg" placeholder="Custom message…" maxlength="60">
+      </div>
+      <div class="row">
+        <button class="send" id="sendMsgBtn">Send message</button>
+      </div>
+      <label>Preset messages</label>
+      <div id="msgList"></div>
+      <div class="row">
+        <input type="text" id="msgNameIn" placeholder="New preset message" maxlength="60" style="flex:1">
+        <button id="addMsgBtn" style="flex:0 0 56px">Add</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="cueModal">
+    <div class="panel">
+      <h2>Edit cue</h2>
+
+      <div class="crow">
+        <label>Name</label>
+        <input type="text" id="ceName" maxlength="60" style="flex:0 0 260px">
+      </div>
+
+      <div class="crow">
+        <label>Type</label>
+        <select id="ceType">
+          <option value="timer">Countdown</option>
+          <option value="countup">Count up</option>
+          <option value="tod">Time of day</option>
+        </select>
+      </div>
+
+      <div class="crow">
+        <label>Duration</label>
+        <input type="number" id="ceMin" min="0" max="999" placeholder="mm" style="flex:0 0 76px">
+        <input type="number" id="ceSec" min="0" max="59" placeholder="ss" style="flex:0 0 76px">
+      </div>
+
+      <div class="crow">
+        <label>Speaker / subtitle</label>
+        <input type="text" id="ceSub" maxlength="60" placeholder="Optional" style="flex:0 0 260px">
+      </div>
+
+      <div class="crow"><label>Show name on display</label><input type="checkbox" id="ceShowName"></div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Timer colour</label>
+        <div class="swatches" id="ceColors"></div>
+      </div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Background tint</label>
+        <div class="swatches" id="ceBgs"></div>
+      </div>
+
+      <div class="crow">
+        <label>Warning threshold (blank = global)</label>
+        <input type="number" id="ceWarnAt" min="0" max="3600" placeholder="global">
+      </div>
+
+      <div class="crow">
+        <label>At zero</label>
+        <select id="ceOvertime">
+          <option value="countup">Count overtime (+1:23)</option>
+          <option value="stop">Stop and hold 0:00</option>
+        </select>
+      </div>
+
+      <div class="crow"><label>Auto-follow — start next cue at zero</label><input type="checkbox" id="ceFollow"></div>
+
+      <div class="crow">
+        <label>Scheduled start (time of day)</label>
+        <input type="time" id="ceSched" style="flex:0 0 110px">
+        <button class="small" id="ceSchedClear" style="flex:0 0 auto">Clear</button>
+      </div>
+
+      <div class="crow">
+        <label>Auto message</label>
+        <input type="text" id="ceAutoMsg" maxlength="60" placeholder="e.g. WRAP UP" style="flex:0 0 170px">
+        <input type="number" id="ceAutoMsgAt" min="1" max="3600" placeholder="secs" title="Seconds remaining when it appears" style="flex:0 0 80px">
+      </div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Notes (controller only)</label>
+        <textarea id="ceNotesIn" rows="2" maxlength="200" style="flex:0 0 260px; background:#23222f; color:#f2f2f2; border:1px solid #454458; border-radius:8px; padding:8px; font-family:inherit; font-size:13px; resize:vertical;"></textarea>
+      </div>
+
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="ceDupBtn">Duplicate</button>
+        <button class="reset" id="ceCancelBtn">Cancel</button>
+        <button class="send" id="ceSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="keysModal">
+    <div class="panel" style="width:420px">
+      <h2>Keyboard shortcuts</h2>
+      <div id="keyList"></div>
+      <div style="font-size:11px; color:#9b9aad; margin:4px 0 12px;">
+        Click a key to change it, then press the new key. Esc cancels. Shortcuts are ignored while typing in a field.
+      </div>
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="keysDefaultsBtn">Reset to defaults</button>
+        <button class="send" id="keysDoneBtn">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="customModal">
+    <div class="panel">
+      <h2>Customise display</h2>
+
+      <div class="crow">
+        <label>Font</label>
+        <select id="setFont">
+          <option value="'Montserrat','Helvetica Neue',Helvetica,Arial,sans-serif">Montserrat</option>
+          <option value="'Helvetica Neue',Helvetica,Arial,sans-serif">Helvetica</option>
+          <option value="Arial,sans-serif">Arial</option>
+          <option value="'Arial Black',Arial,sans-serif">Arial Black</option>
+          <option value="Georgia,'Times New Roman',serif">Georgia</option>
+          <option value="'Courier New',monospace">Courier (mono)</option>
+        </select>
+      </div>
+
+      <div class="crow">
+        <label>Timer size</label>
+        <input type="range" id="setScale" min="0.5" max="1.5" step="0.05">
+        <span class="val" id="setScaleVal">100%</span>
+      </div>
+
+      <div class="crow"><label>Background colour</label><input type="color" id="setBg"></div>
+      <div class="crow"><label>Timer colour</label><input type="color" id="setTimerC"></div>
+      <div class="crow"><label>Message colour</label><input type="color" id="setMsgC"></div>
+      <div class="crow"><label>Warning colour</label><input type="color" id="setWarnC"></div>
+      <div class="crow"><label>Overtime colour</label><input type="color" id="setDangerC"></div>
+
+      <div class="crow">
+        <label>Warning threshold (seconds)</label>
+        <input type="number" id="setWarnAt" min="0" max="3600">
+      </div>
+
+      <div class="crow"><label>Flash when time runs out</label><input type="checkbox" id="setFlash"></div>
+      <div class="crow"><label>24-hour clock (TOD)</label><input type="checkbox" id="set24h"></div>
+      <div class="crow"><label>Show soundcredit.tv wordmark</label><input type="checkbox" id="setBrand"></div>
+
+      <div class="crow">
+        <label>Custom logo (replaces wordmark)</label>
+        <img class="logo-thumb" id="logoThumb" style="display:none" alt="">
+        <input type="file" id="setLogo" accept="image/*">
+        <button class="small" id="logoPickBtn" style="flex:0 0 auto">Choose…</button>
+        <button class="small" id="logoClearBtn" style="flex:0 0 auto">Remove</button>
+      </div>
+
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="setDefaultsBtn">Reset to defaults</button>
+        <button class="send" id="customDoneBtn">Done</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let remaining = 600;      // seconds
+  let running = false;
+  let lastTick = null;
+  let message = '';
+  let speed = 1;            // clock speed multiplier (gaslight mode)
+  let activeCue = -1;
+  let todMode = false;      // display shows time of day instead of countdown
+  let countUp = false;      // stopwatch mode (count up from zero)
+
+  // Normalise cues (upgrades older saved formats)
+  function normaliseCue(c) {
+    return {
+      name: c.name || 'Cue',
+      type: c.type || (c.tod ? 'tod' : 'timer'),
+      seconds: c.seconds || 0,
+      color: c.color || null,
+      bg: c.bg || null,
+      showName: !!c.showName,
+      subtitle: c.subtitle || '',
+      warnAt: (c.warnAt === 0 || c.warnAt) ? c.warnAt : null,
+      overtime: c.overtime || 'countup',
+      autoFollow: !!c.autoFollow,
+      schedStart: c.schedStart || null,
+      autoMsgText: c.autoMsgText || '',
+      autoMsgAt: c.autoMsgAt || 120,
+      notes: c.notes || ''
+    };
+  }
+  let cues = JSON.parse(localStorage.getItem('cues') || '[]').map(normaliseCue);
+
+  const DIGIT_COLORS = ['#f2f2f2','#ffcc02','#ff9f1c','#ff4d4f','#ff5da2','#b06bff','#4da6ff','#2ee6a8','#9be34f'];
+  const BG_TINTS = ['#3a1214','#3a2410','#3a3210','#10321f','#0f3330','#12233a','#2a1440','#3a1430','#26252f'];
+
+  // ---- Display settings ----
+  const defaultSettings = {
+    font: "'Montserrat','Helvetica Neue',Helvetica,Arial,sans-serif",
+    scale: 1,
+    bg: '#111111',
+    timerC: '#f2f2f2',
+    msgC: '#ffcc02',
+    warnC: '#ffcc02',
+    dangerC: '#ff4d4f',
+    warnAt: 60,
+    flash: true,
+    clock24: true,
+    brand: true,
+    logo: null
+  };
+  let settings = Object.assign({}, defaultSettings,
+    JSON.parse(localStorage.getItem('displaySettings') || '{}'));
+
+  function saveSettings() { localStorage.setItem('displaySettings', JSON.stringify(settings)); }
+
+  function fmt(s) {
+    const neg = s < 0;
+    const a = Math.abs(Math.ceil(s));
+    const m = Math.floor(a / 60), r = a % 60;
+    return (neg ? '+' : '') + m + ':' + String(r).padStart(2, '0');
+  }
+
+  function fmtClock() {
+    const d = new Date();
+    let h = d.getHours();
+    if (!settings.clock24) { h = h % 12 || 12; }
+    return [h, d.getMinutes(), d.getSeconds()]
+      .map((n, idx) => idx === 0 && !settings.clock24 ? String(n) : String(n).padStart(2, '0')).join(':');
+  }
+
+  function fmtUp(s) {
+    const a = Math.max(0, Math.floor(s));
+    return Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+
+  function broadcast() {
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+    const warnAt = (cue && cue.warnAt != null) ? cue.warnAt : settings.warnAt;
+    const state = {
+      remaining,
+      running,
+      message,
+      tod: todMode,
+      countup: countUp,
+      danger: !todMode && !countUp && remaining <= 0,
+      warning: !todMode && !countUp && remaining > 0 && remaining <= warnAt,
+      cueTitle: cue && cue.showName ? cue.name : '',
+      cueSub: cue && cue.showName ? cue.subtitle : '',
+      cueColor: cue ? cue.color : null,
+      cueBg: cue ? cue.bg : null,
+      settings
+    };
+    window.timerAPI.sendUpdate(state);
+    $('previewTime').textContent = todMode ? fmtClock() : countUp ? fmtUp(remaining) : fmt(remaining);
+    $('cueName').textContent = cue ? cue.name : '';
+    $('preview').className = 'preview' + (state.danger ? ' danger' : state.warning ? ' warning' : '');
+    const pv = $('preview');
+    pv.style.background = state.cueBg || settings.bg;
+    pv.style.fontFamily = settings.font;
+    $('previewTime').style.color = state.danger ? settings.dangerC
+      : state.warning ? settings.warnC : (state.cueColor || settings.timerC);
+    const notes = cue && cue.notes;
+    $('cueNotes').style.display = notes ? 'block' : 'none';
+    $('cueNotes').textContent = notes || '';
+    $('startBtn').textContent = running ? 'Pause' : 'Start';
+    $('startBtn').className = running ? 'pause' : 'start';
+    $('todBtn').className = todMode ? 'send' : 'quick';
+  }
+
+  function loadCue(i, autoStart, now) {
+    const cue = cues[i];
+    if (!cue) return;
+    activeCue = i;
+    todMode = cue.type === 'tod';
+    countUp = cue.type === 'countup';
+    if (cue.type === 'timer') {
+      remaining = cue.seconds;
+      $('min').value = Math.floor(cue.seconds / 60);
+      $('sec').value = cue.seconds % 60;
+    } else if (cue.type === 'countup') {
+      remaining = 0;
+    }
+    running = !!autoStart && cue.type !== 'tod';
+    lastTick = now != null ? now : performance.now();
+    renderCues();
+    broadcast();
+  }
+
+  function tick(now) {
+    if (running) {
+      const delta = ((now - lastTick) / 1000) * speed;
+      lastTick = now;
+      const prev = remaining;
+      remaining += countUp ? delta : -delta;
+      const cue = activeCue >= 0 ? cues[activeCue] : null;
+
+      if (!countUp && !todMode) {
+        // auto message when crossing the cue's trigger point
+        if (cue && cue.autoMsgText && prev > cue.autoMsgAt && remaining <= cue.autoMsgAt && remaining > 0) {
+          message = cue.autoMsgText;
+          msgSource = 'auto';
+          renderMsgs();
+          updateCustomBtn();
+        }
+        // zero crossing
+        if (prev > 0 && remaining <= 0) {
+          if (msgSource === 'auto') {
+            message = '';
+            msgSource = null;
+            renderMsgs();
+            updateCustomBtn();
+          }
+          if (cue && cue.autoFollow && activeCue + 1 < cues.length) {
+            loadCue(activeCue + 1, true, now);
+            requestAnimationFrame(tick);
+            return;
+          }
+          if (cue && cue.overtime === 'stop') {
+            remaining = 0;
+            running = false;
+          }
+        }
+      }
+      broadcast();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // Scheduled starts — fire a cue at its time of day (once per day)
+  const schedFired = new WeakMap();
+  setInterval(() => {
+    const d = new Date();
+    const cur = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const key = d.toDateString() + ' ' + cur;
+    cues.forEach((cue, i) => {
+      if (cue.schedStart === cur && schedFired.get(cue) !== key) {
+        schedFired.set(cue, key);
+        loadCue(i, true);
+      }
+    });
+  }, 1000);
+
+  function setFromInputs() {
+    const m = parseInt($('min').value, 10) || 0;
+    const s = parseInt($('sec').value, 10) || 0;
+    remaining = m * 60 + s;
+  }
+
+  // ---- Cue list ----
+  function saveCues() { localStorage.setItem('cues', JSON.stringify(cues)); }
+
+  let reorderMode = false;
+  let dragIndex = null;
+
+  function moveCue(from, to) {
+    if (from === to || from == null || to == null) return;
+    const activeObj = activeCue >= 0 ? cues[activeCue] : null;
+    const [moved] = cues.splice(from, 1);
+    cues.splice(to, 0, moved);
+    activeCue = activeObj ? cues.indexOf(activeObj) : -1;
+    saveCues();
+    renderCues();
+    broadcast();
+  }
+
+  function renderCues() {
+    const list = $('cueList');
+    list.innerHTML = '';
+    if (!cues.length) {
+      list.innerHTML = '<div class="empty">No cues yet — add one below</div>';
+      return;
+    }
+    cues.forEach((cue, i) => {
+      const row = document.createElement('div');
+      row.className = 'cue' + (i === activeCue ? ' active' : '');
+      const num = document.createElement('span');
+      num.className = 'dur';
+      num.textContent = (i + 1) + '.';
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = cue.name;
+      const dur = document.createElement('span');
+      dur.className = 'dur';
+      dur.textContent = cue.type === 'tod' ? 'TOD' : cue.type === 'countup' ? 'UP' : fmt(cue.seconds);
+      if (cue.schedStart) { dur.textContent += ' ⏰'; dur.title = 'Starts at ' + cue.schedStart; }
+      row.append(num);
+      if (cue.color || cue.bg) {
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = cue.color || cue.bg;
+        row.append(dot);
+      }
+      row.append(name, dur);
+
+      if (reorderMode) {
+        const grip = document.createElement('span');
+        grip.className = 'grip';
+        grip.textContent = '⠿';
+        row.append(grip);
+        row.classList.add('draggable');
+        row.draggable = true;
+        row.addEventListener('dragstart', (e) => {
+          dragIndex = i;
+          row.classList.add('dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(i));
+        });
+        row.addEventListener('dragend', () => {
+          dragIndex = null;
+          row.classList.remove('dragging');
+          document.querySelectorAll('.cue.drag-over').forEach(r => r.classList.remove('drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (dragIndex !== null && dragIndex !== i) row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          row.classList.remove('drag-over');
+          moveCue(dragIndex, i);
+        });
+      } else {
+        const edit = document.createElement('button');
+        edit.className = 'edit';
+        edit.textContent = '✎';
+        edit.title = 'Edit cue';
+        edit.addEventListener('click', () => openCueEditor(i));
+        row.append(edit);
+        const load = document.createElement('button');
+        const isActive = i === activeCue;
+        load.className = isActive ? 'clear-on' : 'load';
+        load.textContent = isActive ? 'Clear' : 'Load';
+        load.addEventListener('click', () => {
+          if (isActive) {           // unload cue, back to manual time
+            running = false;
+            activeCue = -1;
+            todMode = false;
+            countUp = false;
+            setFromInputs();
+            renderCues();
+            broadcast();
+          } else {
+            loadCue(i, false);
+          }
+        });
+        const del = document.createElement('button');
+        del.className = 'del';
+        del.textContent = '✕';
+        del.title = 'Delete cue';
+        del.addEventListener('click', () => {
+          cues.splice(i, 1);
+          if (activeCue === i) activeCue = -1;
+          else if (activeCue > i) activeCue--;
+          saveCues();
+          renderCues();
+          broadcast();
+        });
+        row.append(load, del);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  $('reorderBtn').addEventListener('click', () => {
+    reorderMode = !reorderMode;
+    $('reorderBtn').textContent = reorderMode ? 'Done' : 'Reorder';
+    $('reorderBtn').className = reorderMode ? 'send' : 'small';
+    renderCues();
+  });
+
+  let addTod = false;   // TOD toggle for the add row
+
+  $('addTodBtn').addEventListener('click', () => {
+    addTod = !addTod;
+    $('addTodBtn').className = addTod ? 'send' : 'quick';
+    $('cueMin').disabled = addTod;
+    $('cueSec').disabled = addTod;
+  });
+
+  $('addCueBtn').addEventListener('click', () => {
+    let cue;
+    if (addTod) {
+      cue = normaliseCue({ name: $('cueNameIn').value.trim() || 'Time of day', type: 'tod' });
+    } else {
+      const name = $('cueNameIn').value.trim() || ('Cue ' + (cues.length + 1));
+      const m = parseInt($('cueMin').value, 10) || 0;
+      const s = parseInt($('cueSec').value, 10) || 0;
+      const seconds = m * 60 + s;
+      if (seconds <= 0) return;
+      cue = normaliseCue({ name, seconds });
+    }
+    cues.push(cue);
+    $('cueNameIn').value = ''; $('cueMin').value = ''; $('cueSec').value = '';
+    saveCues();
+    renderCues();
+  });
+  $('cueNameIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addCueBtn').click(); });
+
+  // ---- Transport ----
+  $('startBtn').addEventListener('click', () => {
+    running = !running;
+    lastTick = performance.now();
+    broadcast();
+  });
+
+  $('todBtn').addEventListener('click', () => {
+    todMode = !todMode;
+    if (todMode) running = false;
+    if (!todMode && activeCue >= 0 && cues[activeCue] && cues[activeCue].type === 'tod') {
+      activeCue = -1;
+      countUp = false;
+      renderCues();
+    }
+    broadcast();
+  });
+
+  $('resetBtn').addEventListener('click', () => {
+    running = false;
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+    if (cue && cue.type === 'timer') remaining = cue.seconds;
+    else if (cue && cue.type === 'countup') remaining = 0;
+    else if (!cue) setFromInputs();
+    broadcast();
+  });
+
+  $('min').addEventListener('change', () => { if (!running) { setFromInputs(); activeCue = -1; countUp = false; renderCues(); broadcast(); } });
+  $('sec').addEventListener('change', () => { if (!running) { setFromInputs(); activeCue = -1; countUp = false; renderCues(); broadcast(); } });
+
+  // ---- Cue editor ----
+  let editingIndex = -1;
+  let ceColor = null;   // selected digit colour (null = default)
+  let ceBg = null;      // selected background tint (null = default)
+
+  function buildSwatches(containerId, palette, getSel, setSel) {
+    const box = $(containerId);
+    box.innerHTML = '';
+    const none = document.createElement('span');
+    none.className = 'swatch none' + (getSel() == null ? ' sel' : '');
+    none.title = 'Default';
+    none.addEventListener('click', () => { setSel(null); buildSwatches(containerId, palette, getSel, setSel); });
+    box.appendChild(none);
+    palette.forEach(col => {
+      const sw = document.createElement('span');
+      sw.className = 'swatch' + (getSel() === col ? ' sel' : '');
+      sw.style.background = col;
+      sw.addEventListener('click', () => { setSel(col); buildSwatches(containerId, palette, getSel, setSel); });
+      box.appendChild(sw);
+    });
+  }
+
+  function openCueEditor(i) {
+    editingIndex = i;
+    const cue = cues[i];
+    $('ceName').value = cue.name;
+    $('ceType').value = cue.type;
+    $('ceMin').value = Math.floor(cue.seconds / 60);
+    $('ceSec').value = cue.seconds % 60;
+    $('ceMin').disabled = $('ceSec').disabled = cue.type !== 'timer';
+    $('ceSub').value = cue.subtitle;
+    $('ceShowName').checked = cue.showName;
+    ceColor = cue.color;
+    ceBg = cue.bg;
+    buildSwatches('ceColors', DIGIT_COLORS, () => ceColor, v => ceColor = v);
+    buildSwatches('ceBgs', BG_TINTS, () => ceBg, v => ceBg = v);
+    $('ceWarnAt').value = cue.warnAt != null ? cue.warnAt : '';
+    $('ceOvertime').value = cue.overtime;
+    $('ceFollow').checked = cue.autoFollow;
+    $('ceSched').value = cue.schedStart || '';
+    $('ceAutoMsg').value = cue.autoMsgText;
+    $('ceAutoMsgAt').value = cue.autoMsgAt;
+    $('ceNotesIn').value = cue.notes;
+    $('cueModal').classList.add('open');
+  }
+
+  function readCueEditor() {
+    const m = parseInt($('ceMin').value, 10) || 0;
+    const s = parseInt($('ceSec').value, 10) || 0;
+    const warnRaw = $('ceWarnAt').value.trim();
+    return normaliseCue({
+      name: $('ceName').value.trim() || 'Cue',
+      type: $('ceType').value,
+      seconds: Math.max(0, m * 60 + s),
+      color: ceColor,
+      bg: ceBg,
+      showName: $('ceShowName').checked,
+      subtitle: $('ceSub').value.trim(),
+      warnAt: warnRaw === '' ? null : Math.max(0, parseInt(warnRaw, 10) || 0),
+      overtime: $('ceOvertime').value,
+      autoFollow: $('ceFollow').checked,
+      schedStart: $('ceSched').value || null,
+      autoMsgText: $('ceAutoMsg').value.trim(),
+      autoMsgAt: Math.max(1, parseInt($('ceAutoMsgAt').value, 10) || 120),
+      notes: $('ceNotesIn').value.trim()
+    });
+  }
+
+  function closeCueEditor() {
+    $('cueModal').classList.remove('open');
+    editingIndex = -1;
+  }
+
+  $('ceType').addEventListener('change', () => {
+    const t = $('ceType').value;
+    $('ceMin').disabled = $('ceSec').disabled = t !== 'timer';
+  });
+  $('ceSchedClear').addEventListener('click', () => { $('ceSched').value = ''; });
+
+  $('ceSaveBtn').addEventListener('click', () => {
+    if (editingIndex < 0) return;
+    const updated = readCueEditor();
+    if (updated.type === 'timer' && updated.seconds <= 0) { alert('Countdown cues need a duration.'); return; }
+    cues[editingIndex] = updated;
+    saveCues();
+    const wasActive = editingIndex === activeCue;
+    closeCueEditor();
+    if (wasActive) loadCue(activeCue, false);
+    else { renderCues(); broadcast(); }
+  });
+
+  $('ceDupBtn').addEventListener('click', () => {
+    if (editingIndex < 0) return;
+    const copy = readCueEditor();
+    copy.name += ' copy';
+    cues.splice(editingIndex + 1, 0, copy);
+    if (activeCue > editingIndex) activeCue++;
+    saveCues();
+    closeCueEditor();
+    renderCues();
+    broadcast();
+  });
+
+  $('ceCancelBtn').addEventListener('click', closeCueEditor);
+  $('cueModal').addEventListener('click', (e) => {
+    if (e.target === $('cueModal')) closeCueEditor();
+  });
+
+  document.querySelectorAll('.quick[data-add]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      remaining += parseInt(btn.dataset.add, 10);
+      broadcast();
+    });
+  });
+
+  // ---- Speed ----
+  $('speed').addEventListener('input', () => {
+    speed = parseFloat($('speed').value);
+    $('speedVal').textContent = speed.toFixed(2) + '×';
+  });
+  $('speedReset').addEventListener('click', () => {
+    speed = 1;
+    $('speed').value = 1;
+    $('speedVal').textContent = '1.00×';
+  });
+
+  // ---- Messages ----
+  // Send buttons toggle: sending switches the button to "Clear"
+  let msgSource = null; // 'custom' | preset index | null
+
+  const defaultPresets = ['WRAP UP', '5 MINUTES LEFT', 'TIME IS UP'];
+  let presets = JSON.parse(localStorage.getItem('presetMsgs') || 'null') || defaultPresets;
+  presets = presets.filter(p => p && p.trim());
+
+  function savePresets() { localStorage.setItem('presetMsgs', JSON.stringify(presets)); }
+
+  function updateCustomBtn() {
+    const custom = $('sendMsgBtn');
+    const customActive = msgSource === 'custom' && message;
+    custom.textContent = customActive ? 'Clear message' : 'Send message';
+    custom.className = customActive ? 'clear-on' : 'send';
+  }
+
+  function renderMsgs() {
+    const list = $('msgList');
+    list.innerHTML = '';
+    if (!presets.length) {
+      list.innerHTML = '<div class="empty">No preset messages — add one below</div>';
+      return;
+    }
+    presets.forEach((text, i) => {
+      const row = document.createElement('div');
+      const active = msgSource === i && message;
+      row.className = 'cue' + (active ? ' active' : '');
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = text;
+      const send = document.createElement('button');
+      send.className = active ? 'clear-on' : 'load';
+      send.textContent = active ? 'Clear' : 'Send';
+      send.addEventListener('click', () => setMessage(text, i));
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = '✕';
+      del.title = 'Delete message';
+      del.addEventListener('click', () => {
+        presets.splice(i, 1);
+        if (msgSource === i) { message = ''; msgSource = null; }
+        else if (typeof msgSource === 'number' && msgSource > i) msgSource--;
+        savePresets();
+        renderMsgs();
+        updateCustomBtn();
+        broadcast();
+      });
+      row.append(name, send, del);
+      list.appendChild(row);
+    });
+  }
+
+  function setMessage(text, source) {
+    if (msgSource === source && message) {  // toggle off
+      message = ''; msgSource = null;
+    } else {
+      message = text; msgSource = text ? source : null;
+    }
+    renderMsgs();
+    updateCustomBtn();
+    broadcast();
+  }
+
+  $('sendMsgBtn').addEventListener('click', () => setMessage($('msg').value.trim(), 'custom'));
+  $('msg').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('sendMsgBtn').click(); });
+
+  $('addMsgBtn').addEventListener('click', () => {
+    const text = $('msgNameIn').value.trim();
+    if (!text) return;
+    presets.push(text);
+    $('msgNameIn').value = '';
+    savePresets();
+    renderMsgs();
+  });
+  $('msgNameIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addMsgBtn').click(); });
+
+  renderMsgs();
+  updateCustomBtn();
+
+  // ---- Display output ----
+  async function refreshDisplays() {
+    const displays = await window.timerAPI.getDisplays();
+    const sel = $('displaySel');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    displays.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.label;
+      sel.appendChild(opt);
+    });
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }
+  $('displaySel').addEventListener('mousedown', refreshDisplays);
+  $('fsBtn').addEventListener('click', () => {
+    const id = parseInt($('displaySel').value, 10);
+    if (!isNaN(id)) window.timerAPI.fullscreenOnDisplay(id);
+  });
+  $('exitFsBtn').addEventListener('click', () => window.timerAPI.exitFullscreen());
+  $('reopenBtn').addEventListener('click', () => { window.timerAPI.reopenDisplay(); setTimeout(broadcast, 500); });
+
+  // ---- Customise panel ----
+  function populateSettingsForm() {
+    $('setFont').value = settings.font;
+    $('setScale').value = settings.scale;
+    $('setScaleVal').textContent = Math.round(settings.scale * 100) + '%';
+    $('setBg').value = settings.bg;
+    $('setTimerC').value = settings.timerC;
+    $('setMsgC').value = settings.msgC;
+    $('setWarnC').value = settings.warnC;
+    $('setDangerC').value = settings.dangerC;
+    $('setWarnAt').value = settings.warnAt;
+    $('setFlash').checked = settings.flash;
+    $('set24h').checked = settings.clock24;
+    $('setBrand').checked = settings.brand;
+    $('logoThumb').style.display = settings.logo ? 'block' : 'none';
+    if (settings.logo) $('logoThumb').src = settings.logo;
+  }
+
+  function settingChanged() { saveSettings(); broadcast(); }
+
+  $('customBtn').addEventListener('click', () => {
+    populateSettingsForm();
+    $('customModal').classList.add('open');
+  });
+  $('customDoneBtn').addEventListener('click', () => $('customModal').classList.remove('open'));
+  $('customModal').addEventListener('click', (e) => {
+    if (e.target === $('customModal')) $('customModal').classList.remove('open');
+  });
+
+  $('setFont').addEventListener('change', () => { settings.font = $('setFont').value; settingChanged(); });
+  $('setScale').addEventListener('input', () => {
+    settings.scale = parseFloat($('setScale').value);
+    $('setScaleVal').textContent = Math.round(settings.scale * 100) + '%';
+    settingChanged();
+  });
+  [['setBg','bg'],['setTimerC','timerC'],['setMsgC','msgC'],['setWarnC','warnC'],['setDangerC','dangerC']]
+    .forEach(([id, key]) => {
+      $(id).addEventListener('input', () => { settings[key] = $(id).value; settingChanged(); });
+    });
+  $('setWarnAt').addEventListener('change', () => {
+    settings.warnAt = Math.max(0, parseInt($('setWarnAt').value, 10) || 0);
+    settingChanged();
+  });
+  $('setFlash').addEventListener('change', () => { settings.flash = $('setFlash').checked; settingChanged(); });
+  $('set24h').addEventListener('change', () => { settings.clock24 = $('set24h').checked; settingChanged(); });
+  $('setBrand').addEventListener('change', () => { settings.brand = $('setBrand').checked; settingChanged(); });
+
+  $('logoPickBtn').addEventListener('click', () => $('setLogo').click());
+  $('setLogo').addEventListener('change', () => {
+    const file = $('setLogo').files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { alert('Logo too large — keep it under 3 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      settings.logo = reader.result;
+      populateSettingsForm();
+      settingChanged();
+    };
+    reader.readAsDataURL(file);
+  });
+  $('logoClearBtn').addEventListener('click', () => {
+    settings.logo = null;
+    $('setLogo').value = '';
+    populateSettingsForm();
+    settingChanged();
+  });
+
+  $('setDefaultsBtn').addEventListener('click', () => {
+    settings = Object.assign({}, defaultSettings);
+    populateSettingsForm();
+    settingChanged();
+  });
+
+  // ---- Keyboard shortcuts (editable) ----
+  const defaultKeymap = {
+    startPause: 'Space',
+    reset: 'KeyR',
+    tod: 'KeyT',
+    plus1: 'ArrowUp',
+    minus1: 'ArrowDown',
+    plus5: 'ArrowRight',
+    clearMsg: 'KeyC'
+  };
+  const actionLabels = {
+    startPause: 'Start / pause',
+    reset: 'Reset',
+    tod: 'Time of day toggle',
+    plus1: '+1 minute',
+    minus1: '−1 minute',
+    plus5: '+5 minutes',
+    clearMsg: 'Clear message'
+  };
+  const actionFns = {
+    startPause: () => $('startBtn').click(),
+    reset: () => $('resetBtn').click(),
+    tod: () => $('todBtn').click(),
+    plus1: () => { remaining += 60; broadcast(); },
+    minus1: () => { remaining -= 60; broadcast(); },
+    plus5: () => { remaining += 300; broadcast(); },
+    clearMsg: () => { message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); broadcast(); }
+  };
+  let keymap = Object.assign({}, defaultKeymap,
+    JSON.parse(localStorage.getItem('keymap') || '{}'));
+  let captureAction = null;
+
+  function saveKeymap() { localStorage.setItem('keymap', JSON.stringify(keymap)); }
+
+  function prettyKey(code) {
+    if (!code) return '—';
+    if (code === 'Space') return 'Space';
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code.startsWith('Numpad')) return 'Num ' + code.slice(6);
+    const arrows = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+    return arrows[code] || code;
+  }
+
+  function renderKeys() {
+    const list = $('keyList');
+    list.innerHTML = '';
+    Object.keys(actionLabels).forEach(action => {
+      const row = document.createElement('div');
+      row.className = 'crow';
+      const lab = document.createElement('label');
+      lab.textContent = actionLabels[action];
+      const chip = document.createElement('button');
+      chip.className = 'keychip' + (captureAction === action ? ' listening' : '');
+      chip.textContent = captureAction === action ? 'Press a key…' : prettyKey(keymap[action]);
+      chip.addEventListener('click', () => {
+        captureAction = captureAction === action ? null : action;
+        renderKeys();
+      });
+      row.append(lab, chip);
+      list.appendChild(row);
+    });
+  }
+
+  $('keysBtn').addEventListener('click', () => { captureAction = null; renderKeys(); $('keysModal').classList.add('open'); });
+  $('keysDoneBtn').addEventListener('click', () => { captureAction = null; $('keysModal').classList.remove('open'); });
+  $('keysModal').addEventListener('click', (e) => {
+    if (e.target === $('keysModal')) { captureAction = null; $('keysModal').classList.remove('open'); }
+  });
+  $('keysDefaultsBtn').addEventListener('click', () => {
+    keymap = Object.assign({}, defaultKeymap);
+    captureAction = null;
+    saveKeymap();
+    renderKeys();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    // rebinding: capture the next key press
+    if (captureAction) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code !== 'Escape') {
+        // unassign this key from any other action first
+        Object.keys(keymap).forEach(a => { if (keymap[a] === e.code) keymap[a] = null; });
+        keymap[captureAction] = e.code;
+        saveKeymap();
+      }
+      captureAction = null;
+      renderKeys();
+      return;
+    }
+    if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return;
+    if ($('keysModal').classList.contains('open') || $('cueModal').classList.contains('open') || $('customModal').classList.contains('open')) return;
+    const action = Object.keys(keymap).find(a => keymap[a] === e.code);
+    if (action) {
+      e.preventDefault();
+      actionFns[action]();
+    }
+  }, true);
+
+  // ---- Show files: save / load / new ----
+  function gatherShow() {
+    return {
+      app: 'StageCredit',
+      version: 1,
+      saved: new Date().toISOString(),
+      cues,
+      presets,
+      settings,
+      keymap
+    };
+  }
+
+  function applyShow(data) {
+    running = false;
+    activeCue = -1;
+    todMode = false;
+    countUp = false;
+    message = '';
+    msgSource = null;
+    cues = (data.cues || []).map(normaliseCue);
+    presets = Array.isArray(data.presets) ? data.presets.filter(p => p && p.trim()) : defaultPresets.slice();
+    settings = Object.assign({}, defaultSettings, data.settings || {});
+    keymap = Object.assign({}, defaultKeymap, data.keymap || {});
+    saveCues();
+    savePresets();
+    saveSettings();
+    saveKeymap();
+    setFromInputs();
+    renderCues();
+    renderMsgs();
+    updateCustomBtn();
+    broadcast();
+  }
+
+  $('saveShowBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.saveShow(gatherShow());
+    if (res && res.error) alert('Could not save: ' + res.error);
+  });
+
+  $('loadShowBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.loadShow();
+    if (!res || !res.ok) {
+      if (res && res.error) alert('Could not load that file: ' + res.error);
+      return;
+    }
+    if (!res.data || res.data.app !== 'StageCredit') {
+      alert('That doesn\'t look like a StageCredit show file.');
+      return;
+    }
+    applyShow(res.data);
+  });
+
+  $('newShowBtn').addEventListener('click', () => {
+    if (!confirm('Start a new show? This clears the cue list, messages, and settings. Save first if you want to keep the current show.')) return;
+    applyShow({});
+  });
+
+  renderCues();
+  refreshDisplays();
+  broadcast();
+  requestAnimationFrame(tick);
+  // periodic broadcast so a reopened display syncs even when paused
+  setInterval(broadcast, 1000);
+</script>
+</body>
+</html>

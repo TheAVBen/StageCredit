@@ -1,0 +1,7 @@
+name,duration,type,speaker,show_name,warn_at,overtime,auto_follow,scheduled_start,auto_message,auto_message_at,notes
+"Doors open",15:00,timer,,no,60,countup,no,,,,"Walk-in music"
+"Welcome",5:00,timer,"Ben Jackson",yes,60,countup,yes,,,,
+"Keynote",30:00,timer,"Dr Amara Osei",yes,300,countup,no,,"WRAP UP",120,"Radio mic 2"
+"Q&A",900,timer,,yes,,stop,no,,,,"Bare number = seconds"
+"Break",15:00,timer,,no,,countup,no,14:30,,,"scheduled_start fires at a time of day"
+"Open discussion",0,countup,,yes,,,no,,,,"Counts up, no fixed duration"

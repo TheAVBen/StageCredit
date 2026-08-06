@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- See the note in control.html. Same policy; the display also needs data: images
+     for the custom logo. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>StageCredit — Display</title>
+<!-- Bundled locally; see the note in control-v2.html. No network, so no swap —
+     which also means the message autofit measures the real font first time. -->
+<link rel="stylesheet" href="fonts/montserrat.css">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  :root {
+    --bg-c: #111111;
+    --time-c: #f2f2f2;
+    --msg-c: #ffcc02;
+    --warn-c: #ffcc02;
+    --danger-c: #ff4d4f;
+    --scale: 1;
+    --tod-scale: 1;
+    --next-scale: 1;
+    --font: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg-c); color: var(--time-c); overflow: hidden; cursor: none;
+    font-family: var(--font);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  #brand {
+    position: fixed; bottom: 3vh; left: 0; right: 0; text-align: center;
+    font-size: 1.8vw; font-weight: 700; color: #4a495e;
+    letter-spacing: -.01em; text-transform: lowercase;
+  }
+  #brand .tv {
+    color: #ffcc02; opacity: .7; font-size: .5em; font-weight: 800;
+    vertical-align: .75em;
+  }
+  #time {
+    font-size: calc(28vw * var(--scale)); font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+    color: var(--time-c);
+  }
+  body.tod #time { font-size: calc(20vw * var(--scale)); }
+  body.warning #time { color: var(--warn-c); }
+  body.danger #time { color: var(--danger-c); }
+  body.flash { animation: flash 0.5s steps(2) infinite; }
+  @keyframes flash {
+    0% { background: var(--bg-c); }
+    50% { background: #7a0000; }
+  }
+  /* The clock must never move when a message appears. So this band is a FIXED
+     height — exactly one line, scaled with --scale — and stays that height whether
+     it's empty, short, or long. line-height equals the height, which both centres
+     the text vertically and survives the autofit shrink in script (that changes
+     font-size only). Long messages are shrunk to fit rather than wrapped. */
+  #message {
+    --msg-line: calc(7vw * var(--scale) * 1.15);
+    font-size: calc(7vw * var(--scale)); font-weight: 800; color: var(--msg-c);
+    letter-spacing: .05em;
+    margin-top: 2vh; text-align: center; padding: 0 4vw;
+    height: var(--msg-line); line-height: var(--msg-line);
+    white-space: nowrap; overflow: hidden;
+    text-transform: uppercase;
+  }
+  #logoImg {
+    position: fixed; bottom: 3vh; left: 50%; transform: translateX(-50%);
+    max-height: 9vh; max-width: 40vw; display: none;
+  }
+  /* Both bands are FIXED height for the same reason as #message: the body is a
+     centred flex column, so anything that collapses to zero height when empty
+     shifts the clock the moment a cue with a name loads. height == line-height
+     centres the text and holds the box whether or not there's content. */
+  #cueTitle {
+    font-size: calc(4.5vw * var(--scale)); font-weight: 700;
+    color: var(--time-c); opacity: .85; text-align: center;
+    text-transform: uppercase; letter-spacing: .08em; padding: 0 4vw;
+    height: calc(4.5vw * var(--scale) * 1.15); line-height: calc(4.5vw * var(--scale) * 1.15);
+    white-space: nowrap; overflow: hidden;
+  }
+  #cueSub {
+    font-size: calc(2.5vw * var(--scale)); font-weight: 600;
+    color: var(--time-c); opacity: .5; text-align: center;
+    letter-spacing: .05em; margin-bottom: 1vh; padding: 0 4vw;
+    height: calc(2.5vw * var(--scale) * 1.15); line-height: calc(2.5vw * var(--scale) * 1.15);
+    white-space: nowrap; overflow: hidden;
+  }
+  #paused {
+    position: fixed; top: 3vh; right: 3vw; font-size: 2.5vw;
+    color: #8b93a7; font-weight: 600; letter-spacing: .2em;
+    display: none;
+  }
+  /* Collision avoidance: PAUSED moves to the free top corner, and the link-lost
+     warning to the free bottom one, rather than stacking on the clock. */
+  body.tod-tr.showtod #paused { right: auto; left: 3vw; }
+  body.tod-br.showtod #linkLost { right: auto; left: 3vw; }
+  /* Wall clock alongside the countdown. Fixed-position on purpose: it sits outside
+     the centred stack, so it can appear, disappear or resize without ever moving the
+     timer. Sized by its own --tod-scale rather than --scale, so changing the main
+     timer size doesn't drag it along. */
+  #todClock {
+    position: fixed; top: 3vh; left: 3vw; font-size: calc(2.5vw * var(--tod-scale));
+    color: var(--time-c); opacity: .4; font-weight: 700;
+    font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    display: none;
+  }
+  body.showtod #todClock { display: block; }
+  /* Four corners. Each rule clears the opposite edges so switching never leaves a
+     stale offset behind. */
+  body.tod-tl #todClock { top: 3vh; left: 3vw; right: auto; bottom: auto; }
+  body.tod-tr #todClock { top: 3vh; right: 3vw; left: auto; bottom: auto; }
+  body.tod-bl #todClock { bottom: 3vh; left: 3vw; right: auto; top: auto; }
+  body.tod-br #todClock { bottom: 3vh; right: 3vw; left: auto; top: auto; }
+  /* Redundant when the whole display is already a clock */
+  body.tod #todClock { display: none; }
+  /* "Next up" for the presenter. Fixed-position, above the wordmark: like the corner
+     clock it sits outside the centred stack, so it can appear and disappear between
+     cues without ever nudging the timer. */
+  /* Faded rather than display-toggled: it now appears partway through a cue rather
+     than at cue load, and a hard pop-in mid-countdown pulls the eye off the clock.
+     Kept in the layout permanently (harmless — it's fixed-position) so opacity can
+     actually transition. */
+  #nextUp {
+    position: fixed; bottom: 8.5vh; left: 0; right: 0; text-align: center;
+    font-size: calc(2vw * var(--next-scale)); font-weight: 700; color: var(--time-c);
+    letter-spacing: .06em; text-transform: uppercase; padding: 0 6vw;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    opacity: 0; transition: opacity .4s ease; pointer-events: none;
+  }
+  body.next-bottom #nextUp { bottom: 8.5vh; top: auto; }
+  body.next-top #nextUp { top: 4vh; bottom: auto; }
+  /* Sharing an edge with the corner clock: pull the centred text in so a long cue
+     name can't run underneath it. */
+  body.next-top.tod-tl.showtod #nextUp,
+  body.next-top.tod-tr.showtod #nextUp,
+  body.next-bottom.tod-bl.showtod #nextUp,
+  body.next-bottom.tod-br.showtod #nextUp { padding: 0 18vw; }
+  #nextUp .lab { opacity: .6; margin-right: .6em; font-weight: 600; }
+  body.hasnext #nextUp { opacity: .45; }
+
+  /* Blackout — instantly blank the output without closing the window */
+  body.blackout { background: #000 !important; animation: none !important; }
+  body.blackout > * { visibility: hidden; }
+
+  /* Clock-only confidence view: same engine, stripped presentation. Only the timer
+     survives, so FOH gets an unambiguous readout with nothing else competing. */
+  body.view-clock #message,
+  body.view-clock #cueTitle,
+  body.view-clock #cueSub,
+  body.view-clock #nextUp,
+  body.view-clock #brand,
+  body.view-clock #logoImg { display: none !important; }
+  body.view-clock #time { font-size: calc(34vw * var(--scale)); }
+  body.view-clock.tod #time { font-size: calc(24vw * var(--scale)); }
+
+  /* Shown on served pages only, when the socket drops. Fixed-position so it can
+     never shift the clock. */
+  #linkLost {
+    position: fixed; bottom: 3vh; right: 3vw; font-size: 1.6vw; font-weight: 700;
+    color: #ff4d4f; letter-spacing: .12em; text-transform: uppercase; display: none;
+  }
+  body.lost #linkLost { display: block; }
+</style>
+</head>
+<body>
+  <div id="paused">PAUSED</div>
+  <div id="todClock"></div>
+  <div id="cueTitle"></div>
+  <div id="cueSub"></div>
+  <div id="time">10:00</div>
+  <div id="message"></div>
+  <div id="nextUp"><span class="lab">Next</span><span id="nextUpName"></span></div>
+  <div id="brand">soundcredit<span class="tv">.tv</span></div>
+  <img id="logoImg" alt="">
+  <div id="linkLost">Link lost</div>
+
+<script>
+  // ---- Transport ----
+  // This page runs in two places: as an Electron window (state over IPC) and as a
+  // webpage served to any browser on the LAN (state over WebSocket). Everything below
+  // is written against onState/onSettings and doesn't care which.
+  const isElectron = !!window.timerAPI;
+
+  // ?view=clock from the Electron window, /clock from the server (which injects the
+  // class directly, since a served page has no query string to rely on).
+  (function applyView() {
+    const v = new URLSearchParams(location.search).get('view');
+    if (v === 'clock') document.body.classList.add('view-clock');
+  })();
+
+  let onStateCb = () => {};
+  let onSettingsCb = () => {};
+
+  if (isElectron) {
+    window.timerAPI.onUpdate(s => onStateCb(s));
+    window.timerAPI.onSettings(s => onSettingsCb(s));
+    // Ask for the current picture rather than waiting for the next tick — matters
+    // when a display window is reopened mid-show.
+    window.timerAPI.requestSnapshot().then(snap => {
+      if (snap && snap.settings) onSettingsCb(snap.settings);
+      if (snap && snap.state) onStateCb(snap.state);
+    });
+  } else {
+    // Venue wifi drops. Reconnect with backoff, and say so on screen rather than
+    // silently freezing on a stale number — a frozen clock is worse than no clock.
+    let ws = null, retry = 500;
+    const connect = () => {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/ws');
+      ws.onopen = () => {
+        retry = 500;
+        document.body.classList.remove('lost');
+      };
+      ws.onmessage = ev => {
+        let m;
+        try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'snapshot') {
+          if (m.settings) onSettingsCb(m.settings);
+          if (m.state) onStateCb(m.state);
+        } else if (m.type === 'state') onStateCb(m.state);
+        else if (m.type === 'settings') onSettingsCb(m.settings);
+      };
+      ws.onclose = () => {
+        document.body.classList.add('lost');
+        setTimeout(connect, retry);
+        retry = Math.min(retry * 2, 8000);
+      };
+      ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    };
+    connect();
+  }
+
+  const timeEl = document.getElementById('time');
+  const msgEl = document.getElementById('message');
+  const pausedEl = document.getElementById('paused');
+
+  const cueTitleEl = document.getElementById('cueTitle');
+  const cueSubEl = document.getElementById('cueSub');
+  const nextUpNameEl = document.getElementById('nextUpName');
+
+  function fmt(s) {
+    const neg = s < 0;
+    const a = Math.abs(Math.ceil(s));
+    const m = Math.floor(a / 60), r = a % 60;
+    return (neg ? '+' : '') + m + ':' + String(r).padStart(2, '0');
+  }
+
+  function fmtUp(s) {
+    const a = Math.max(0, Math.floor(s));
+    return Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+
+  let clock24 = true;
+  let flashOn = true;
+
+  function fmtClock() {
+    const d = new Date();
+    let h = d.getHours();
+    if (!clock24) { h = h % 12 || 12; }
+    return [h, d.getMinutes(), d.getSeconds()]
+      .map((n, idx) => idx === 0 && !clock24 ? String(n) : String(n).padStart(2, '0')).join(':');
+  }
+
+  const brandEl = document.getElementById('brand');
+  const logoEl = document.getElementById('logoImg');
+  let lastScale = null, lastFont = null;
+
+  function applySettings(s) {
+    const r = document.documentElement.style;
+    r.setProperty('--bg-c', s.bg);
+    r.setProperty('--time-c', s.timerC);
+    r.setProperty('--msg-c', s.msgC);
+    r.setProperty('--warn-c', s.warnC);
+    r.setProperty('--danger-c', s.dangerC);
+    r.setProperty('--scale', s.scale);
+    r.setProperty('--tod-scale', s.todScale != null ? s.todScale : 1);
+    r.setProperty('--next-scale', s.nextScale != null ? s.nextScale : 1);
+    // Positions come through as body classes; older show files fall back to the
+    // original hard-coded placements.
+    const tp = ['tl','tr','bl','br'].includes(s.todPos) ? s.todPos : 'tl';
+    ['tl','tr','bl','br'].forEach(k => document.body.classList.toggle('tod-' + k, k === tp));
+    const np = s.nextPos === 'top' ? 'top' : 'bottom';
+    document.body.classList.toggle('next-top', np === 'top');
+    document.body.classList.toggle('next-bottom', np === 'bottom');
+    r.setProperty('--font', s.font);
+    // scale and font both change the band's metrics — refit, but only on change,
+    // never on every update tick
+    if (s.scale !== lastScale || s.font !== lastFont) {
+      lastScale = s.scale; lastFont = s.font;
+      if (typeof fitMessage === 'function') fitMessage();
+    }
+    clock24 = !!s.clock24;
+    flashOn = !!s.flash;
+    document.body.classList.toggle('showtod', !!s.todAlongside);
+    // paint immediately rather than waiting up to 250ms for the next tick
+    if (s.todAlongside) todClockEl.textContent = fmtClock();
+    if (s.logo) {
+      if (logoEl.src !== s.logo) logoEl.src = s.logo;
+      logoEl.style.display = 'block';
+      brandEl.style.display = 'none';
+    } else {
+      logoEl.style.display = 'none';
+      brandEl.style.display = s.brand ? 'block' : 'none';
+    }
+  }
+
+  // Shrink an over-long message to fit the fixed one-line band. Nothing is
+  // truncated and the band height never changes, so the clock stays put.
+  let shownMsg = null;
+  function fitMessage() {
+    msgEl.style.fontSize = '';                 // back to the CSS-driven maximum
+    if (!msgEl.textContent) return;
+    const max = parseFloat(getComputedStyle(msgEl).fontSize);
+    const floor = max * 0.35;
+    let fs = max;
+    let guard = 40;
+    while (msgEl.scrollWidth > msgEl.clientWidth && fs > floor && guard-- > 0) {
+      fs -= max * 0.04;
+      msgEl.style.fontSize = fs + 'px';
+    }
+  }
+  function setMessage(text) {
+    const next = text || '';
+    if (next === shownMsg) return;             // avoid refitting every update tick
+    shownMsg = next;
+    msgEl.textContent = next;
+    fitMessage();
+  }
+  window.addEventListener('resize', fitMessage);
+  // The webfont arriving changes glyph metrics after we've already fitted, so refit
+  // on swap too. Guarded — document.fonts is absent in no-webfont edge cases.
+  if (document.fonts) {
+    document.fonts.ready.then(fitMessage);
+    document.fonts.addEventListener('loadingdone', fitMessage);
+  }
+
+  let todActive = false;
+  const todClockEl = document.getElementById('todClock');
+
+  // local clock tick so time of day stays smooth between control updates
+  setInterval(() => {
+    if (todActive) timeEl.textContent = fmtClock();
+    // corner clock ticks independently of the countdown
+    if (document.body.classList.contains('showtod')) todClockEl.textContent = fmtClock();
+  }, 250);
+
+  // Settings now arrive on their own channel, only when they change — they carry the
+  // logo, which is far too big to have been riding along with every state tick.
+  // Remembered so per-cue colour overrides can be undone without waiting for the
+  // next settings push.
+  let baseSettings = null;
+  onSettingsCb = (s) => {
+    if (!s) return;
+    baseSettings = s;
+    applySettings(s);
+  };
+
+  onStateCb = (state) => {
+    if (!state) return;
+    document.body.classList.toggle('blackout', !!state.blackout);
+    // per-cue overrides on top of global settings
+    const r = document.documentElement.style;
+    // Reassert the base colours first, so clearing a tinted cue doesn't leave its
+    // colour stuck until the next settings change.
+    if (baseSettings) {
+      r.setProperty('--time-c', baseSettings.timerC);
+      r.setProperty('--bg-c', baseSettings.bg);
+    }
+    if (state.cueColor) r.setProperty('--time-c', state.cueColor);
+    if (state.cueBg) r.setProperty('--bg-c', state.cueBg);
+
+    // Driven purely by whether the control panel sent a name, so it self-hides at
+    // the end of the cue list and when the setting is off. The text is only written
+    // when non-empty, so the name stays put while it fades out instead of vanishing
+    // and leaving the "Next" label fading on its own.
+    if (state.nextName) nextUpNameEl.textContent = state.nextName;
+    document.body.classList.toggle('hasnext', !!state.nextName);
+
+    cueTitleEl.textContent = state.cueTitle || '';
+    cueSubEl.textContent = state.cueSub || '';
+    // visibility, not display — display:none would collapse the reserved band and
+    // move the clock, which is the whole thing we're preventing
+    cueSubEl.style.visibility = state.cueSub ? 'visible' : 'hidden';
+
+    todActive = !!state.tod;
+    document.body.classList.toggle('tod', todActive);
+    setMessage(state.message);
+
+    if (todActive) {
+      timeEl.textContent = fmtClock();
+      pausedEl.style.display = 'none';
+      document.body.classList.remove('warning', 'danger', 'flash');
+      return;
+    }
+
+    timeEl.textContent = state.countup ? fmtUp(state.remaining) : fmt(state.remaining);
+    pausedEl.style.display = (!state.running && (state.countup || state.remaining > 0)) ? 'block' : 'none';
+
+    document.body.classList.toggle('warning', !!state.warning);
+    document.body.classList.toggle('danger', !!state.danger);
+    // flash only right around zero (first 10s of overtime), then settle on solid red
+    document.body.classList.toggle('flash', flashOn && state.danger && state.remaining > -10 && state.running);
+  };
+</script>
+</body>
+</html>

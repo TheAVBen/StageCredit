@@ -1,0 +1,3224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- No network access at all: everything is local, so connect-src is denied outright.
+     'unsafe-inline' is required for the inline style and script blocks and for inline
+     style attributes. It deliberately does not grant unsafe-eval, which is what the
+     Electron security warning was actually about. img-src allows data: for the custom
+     logo, stored as a base64 data URL in localStorage. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>StageCredit — Control</title>
+<!-- Boot overlay styles come FIRST and are self-contained: no webfont, no external
+     file, nothing that could itself be the thing we're waiting on. The overlay is
+     opacity:0 with a 160ms animation delay, so a fast launch never flashes it —
+     it only becomes visible if loading is actually slow enough to need explaining. -->
+<style>
+  #boot {
+    position: fixed; inset: 0; z-index: 99; background: #2c2b3b;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    opacity: 0; animation: bootin .18s ease .16s forwards;
+  }
+  @keyframes bootin { to { opacity: 1; } }
+  #boot.done { display: none; }
+  #boot .mark { font-size: 20px; font-weight: 700; color: #f2f2f2; text-transform: lowercase; }
+  #boot .mark span { color: #ffcc02; font-size: .5em; font-weight: 800; vertical-align: .75em; }
+  #boot .msg { font-size: 9px; letter-spacing: .25em; text-transform: uppercase; color: #6f6e80; font-weight: 700; }
+  #boot .bar { width: 150px; height: 3px; background: #454458; border-radius: 2px; overflow: hidden; }
+  #boot .bar i { display: block; width: 40%; height: 100%; background: #ffcc02; border-radius: 2px;
+    animation: bootslide 1s ease-in-out infinite; }
+  @keyframes bootslide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+</style>
+<!-- Montserrat is bundled locally (fonts/), so there is no network request on the
+     critical path and no font swap. Blocking is fine and correct here: it's a local
+     file read, and it means no flash of fallback text. -->
+<link rel="stylesheet" href="fonts/montserrat.css">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  /* Always reserve the scrollbar gutter. Without this, content crossing the
+     window height makes a scrollbar appear, the layout narrows by ~15px, and
+     everything reflows sideways — which is what nudged the clock. */
+  html { scrollbar-gutter: stable; overflow-y: scroll; }
+  body {
+    font-family: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #2c2b3b; color: #f2f2f2; padding: 14px 16px 16px;
+    user-select: none;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  h1 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; text-transform: lowercase; }
+  h1 .tv { color: #ffcc02; font-size: .5em; font-weight: 800; vertical-align: .75em; letter-spacing: 0; }
+  .tagline { font-size: 9px; color: #9b9aad; letter-spacing: .22em; text-transform: uppercase; font-weight: 700; }
+  .topbar-right { display: flex; gap: 6px; align-items: center; }
+  .outstatus {
+    display: flex; align-items: center; gap: 6px; font-size: 10px; color: #9b9aad;
+    background: #23222f; border-radius: 7px; padding: 7px 10px; margin-right: 4px;
+    letter-spacing: .04em; white-space: nowrap;
+  }
+  .outdot { width: 7px; height: 7px; border-radius: 50%; background: #9b9aad; flex: 0 0 auto; }
+  .outdot.live { background: #3ddc84; }
+  .outdot.warn { background: #ff4d4f; }
+  .outstatus { cursor: pointer; }
+
+  /* ---------- Buttons ---------- */
+  button {
+    flex: 1; padding: 12px 8px; border: none; border-radius: 8px;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    background: #454458; color: #f2f2f2;
+    text-transform: uppercase; letter-spacing: .06em; font-family: inherit;
+  }
+  button:hover { filter: brightness(1.15); }
+  button:active { transform: scale(.98); }
+  button:focus-visible { outline: 2px solid #ffcc02; outline-offset: 2px; }
+  .start { background: #ffcc02; color: #111; }
+  .pause { background: #f2f2f2; color: #111; }
+  .reset { background: #454458; }
+  .quick { background: #23222f; font-size: 12px; min-height: 44px; }
+  .send { background: #ffcc02; color: #111; }
+  .clear-on { background: #ff4d4f; color: #fff; }
+  .small { font-size: 11px; padding: 14px 13px; background: #23222f; color: #9b9aad; flex: 0 0 auto; min-height: 44px; }
+  .small.on { background: #1d5c3a; color: #8ff0bd; }
+  .hint { opacity: .55; font-weight: 700; margin-left: 5px; }
+
+  /* ---------- Layout ---------- */
+  .cols { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: minmax(0,1fr); } }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  label {
+    font-size: 9px; color: #9b9aad; display: block; margin-bottom: 5px;
+    text-transform: uppercase; letter-spacing: .18em; font-weight: 700;
+  }
+  hr { border: none; border-top: 1px solid #454458; margin: 14px 0; }
+  input[type="number"], input[type="text"], select {
+    width: 100%; padding: 10px; border: 1px solid #454458; border-radius: 8px;
+    background: #23222f; color: #f2f2f2; font-size: 15px; text-align: center; font-family: inherit;
+  }
+  input[type="text"] { text-align: left; }
+  select { text-align: left; cursor: pointer; }
+  input:focus, select:focus { outline: 2px solid #ffcc02; border-color: #ffcc02; }
+  input:disabled { opacity: .35; }
+  input[type="range"] { accent-color: #ffcc02; }
+
+  /* ---------- Clock ---------- */
+  .clockwrap {
+    background: #111; border-radius: 12px; padding: 14px 18px 16px;
+    border-left: 5px solid #9b9aad; font-variant-numeric: tabular-nums;
+  }
+  .clockwrap.running { border-left-color: #3ddc84; }
+  .clockwrap.paused  { border-left-color: #7f8bb5; }
+  .clockwrap.over    { border-left-color: #ff4d4f; }
+  /* Fixed height and no wrapping: this row sits directly above the clock, so if it
+     ever reflowed to two lines the clock would jump. */
+  .clockmeta {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    margin-bottom: 2px; height: 14px; flex-wrap: nowrap; overflow: hidden;
+  }
+  .clockmeta > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statelabel { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; color: #9b9aad; }
+  .clockwrap.running .statelabel { color: #3ddc84; }
+  .clockwrap.paused  .statelabel { color: #9aa6d0; }
+  .clockwrap.over    .statelabel { color: #ff4d4f; }
+  .endsat { font-size: 11px; color: #9b9aad; letter-spacing: .04em; }
+  .preview .time {
+    font-size: clamp(54px, 8.5vw, 112px); line-height: 1;
+    font-weight: 800; color: #f2f2f2; letter-spacing: -.02em; display: block;
+  }
+  .preview .cuename {
+    font-size: 12px; color: #9b9aad; letter-spacing: .05em; font-weight: 600;
+    min-height: 15px; margin-top: 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .progress { height: 3px; background: #454458; border-radius: 2px; margin-top: 10px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: #3ddc84; border-radius: 2px; transition: width .2s linear; }
+  .clockwrap.paused .progress > div { background: #7f8bb5; }
+  .clockwrap.over   .progress > div { background: #ff4d4f; }
+  #cueNotes {
+    display: none; font-size: 12px; color: #d8d7e4; background: #23222f;
+    border-left: 3px solid #ffcc02; padding: 9px 11px; margin-top: 8px; line-height: 1.45;
+  }
+
+  /* ---------- Transport ---------- */
+  .transport { display: flex; gap: 6px; margin-top: 10px; align-items: stretch; }
+  /* A gap so Blank is not adjacent to TOD — they used to be identical .quick buttons
+     side by side, and one of them blanks the programme output. */
+  .transport .spacer { flex: 0 0 14px; }
+  #blackBtn {
+    position: relative; overflow: hidden; flex: 1.15;
+    background: #2a1214; border: 1px solid #7a2c2e; color: #ff8f90; font-size: 12px;
+  }
+  #blackBtn.on { background: #ff4d4f; border-color: #ff4d4f; color: #fff; }
+  /* Fills left-to-right while held; releasing early cancels. */
+  #blackBtn .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: rgba(255,77,79,.35); pointer-events: none;
+  }
+  .transport #startBtn { flex: 2.4; padding: 18px 8px; font-size: 15px; }
+  .transport .reset, .transport .quick { flex: 1; padding: 18px 8px; }
+  .adds { display: flex; gap: 6px; margin-top: 6px; }
+  .adds button { padding: 9px 4px; font-size: 11px; }
+  /* ---------- Clock speed ---------- */
+  /* Lives on the main surface, not in Settings: it's used mid-show to claw back or
+     give away schedule. The amber treatment plus the flag on the clock is what makes
+     an accidental drag obvious rather than silent. */
+  .speedrow {
+    position: relative; margin-top: 10px; border: 1px solid #454458;
+    border-radius: 10px; padding: 9px 12px 11px; background: #262532;
+  }
+  /* Two-click: the slider is disabled and covered until deliberately armed, so a
+     stray drag past the bottom of the panel can't retime the show. Re-arms itself
+     after 8s of no input, so it can never be left open for the rest of the night. */
+  .armveil {
+    position: absolute; inset: 0; width: 100%; border-radius: 10px;
+    background: #2c2b3b; color: #6f6e80; border: none;
+    font-family: inherit; font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: none; cursor: pointer;
+  }
+  .armveil b { color: #9b9aad; font-variant-numeric: tabular-nums; }
+  .armveil:hover { background: #313040; color: #9b9aad; filter: none; }
+  .speedrow.armed .armveil { display: none; }
+  /* Off 1.00x the veil still reports it — evidence must survive disarming. */
+  body.speedy .armveil { background: #2f2a1a; color: #ffcc02; }
+  body.speedy .armveil b { color: #ffcc02; }
+  body.speedy .speedrow { border-color: #ffcc02; background: #2f2a1a; }
+  .speedrow .shead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .speedrow .slbl {
+    font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    font-weight: 700; color: #9b9aad;
+  }
+  body.speedy .speedrow .slbl { color: #ffcc02; }
+  .speedrow .shead .small { padding: 8px 10px; min-height: 0; font-size: 10px; visibility: hidden; }
+  body.speedy .speedrow .shead .small { visibility: visible; }
+  .speedrow .sbody { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+  .speedrow input[type="range"] { flex: 1; }
+  .speedrow .sval {
+    flex: 0 0 54px; text-align: right; font-size: 13px; font-weight: 700;
+    font-variant-numeric: tabular-nums; color: #9b9aad;
+  }
+  body.speedy .speedrow .sval { color: #ffcc02; }
+  body.touch .speedrow { padding: 13px 14px 15px; }
+  body.touch .speedrow .sval { font-size: 16px; }
+
+  /* ---------- Manual override ---------- */
+  .manualblock {
+    margin-top: 10px; border: 1px solid #454458; border-radius: 10px;
+    padding: 10px 12px 12px; background: #262532;
+  }
+  .manualblock.on { border-color: #ffcc02; background: #2f2a1a; }
+  .mhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .mlabel {
+    font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    font-weight: 700; color: #9b9aad; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .manualblock.on .mlabel { color: #ffcc02; }
+  .manualblock.on #manualBtn { background: #ffcc02; color: #111; }
+  .mbody { display: flex; gap: 8px; align-items: flex-end; }
+  .mbody > div { flex: 1; }
+  .mbody label { margin-bottom: 4px; }
+  .mbody #setManualBtn { flex: 0 0 72px; padding: 10px 8px; }
+  .manualblock:not(.on) .mbody { opacity: .5; }
+  .manualblock .mbody input:disabled { opacity: .85; }
+  button:disabled { cursor: default; }
+  #manualBtn:disabled, #setManualBtn:disabled { filter: none; }
+
+  /* ---------- Backtiming strip ---------- */
+  /* The editor pops out of the readout it feeds, rather than sitting in a separate
+     part of the window — cause and effect in one place. */
+  .schedwrap { position: relative; margin-top: 10px; }
+  .schedhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .schedhead label { margin-bottom: 0; }
+  .schedbar {
+    display: grid; grid-template-columns: repeat(3, minmax(0,1fr));
+    gap: 8px; cursor: pointer;
+  }
+  .schedbar:hover .sched { background: #2a2937; }
+
+  .schedpop {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+    background: #2c2b3b; border: 1px solid #ffcc02; border-radius: 10px;
+    padding: 14px; z-index: 8;
+  }
+  .schedpop.open { display: block; }
+  .poprow { display: flex; gap: 12px; margin-bottom: 10px; }
+  .popfield { flex: 1; min-width: 0; }
+  .popfield label { margin-bottom: 4px; }
+  .popfield input[type="time"] {
+    width: 100%; padding: 10px; border: 1px solid #454458; border-radius: 8px;
+    background: #23222f; color: #f2f2f2; font-size: 16px; font-family: inherit;
+    text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .popfield input[type="time"]:focus { outline: 2px solid #ffcc02; border-color: #ffcc02; }
+  .hint2 { display: block; font-size: 10px; color: #6f6e80; margin-top: 5px; line-height: 1.45; }
+  .popsum {
+    font-size: 11px; color: #9b9aad; background: #23222f; border-radius: 8px;
+    padding: 9px 11px; margin-bottom: 10px; line-height: 1.5;
+  }
+  .popsum b { color: #f2f2f2; font-weight: 700; }
+  .sched {
+    background: #23222f; border-radius: 8px; padding: 8px 10px;
+    border-left: 3px solid transparent; min-width: 0;
+  }
+  .sched .lbl {
+    display: block; font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
+    color: #6f6e80; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sched .val {
+    display: block; font-size: 15px; font-weight: 700; color: #f2f2f2;
+    font-variant-numeric: tabular-nums; margin-top: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sched.idle .val { color: #6f6e80; font-weight: 400; }
+  .sched.ahead { border-left-color: #3ddc84; } .sched.ahead .val { color: #3ddc84; }
+  .sched.late  { border-left-color: #ffcc02; } .sched.late  .val { color: #ffcc02; }
+  .sched.bust  { border-left-color: #ff4d4f; } .sched.bust  .val { color: #ff4d4f; }
+  .sched .est { font-size: 10px; font-weight: 700; color: #6f6e80; margin-left: 4px; }
+  /* No schedule set, nothing to report — the strip earns its space or gives it up. */
+  /* Only the three readout boxes are dead space when there's no schedule — the
+     header has to stay, because the button that SETS the schedule lives in it. */
+  .schedbar { display: none; }
+  body.hassched .schedbar { display: grid; }
+  .schedhead .hint { font-size: 10px; color: #6f6e80; font-weight: 400; letter-spacing: 0; }
+  body.hassched .schedhead .hint { display: none; }
+  .nextbar .val.armed { color: #ffcc02; }
+
+  
+  /* Projected clock time per cue row */
+  .cue .eta {
+    font-size: 11px; color: #6f6e80; font-variant-numeric: tabular-nums;
+    flex: 0 0 auto; min-width: 38px; text-align: right;
+  }
+  .cue.active .eta { color: #9b9aad; }
+
+  /* ---------- Now / next ---------- */
+  .nextbar {
+    margin-top: 10px; background: #23222f; border-radius: 10px;
+    padding: 10px 12px; display: flex; align-items: center; gap: 12px;
+  }
+  .nextbar .meta { flex: 1; min-width: 0; }
+  .nextbar .lbl { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #9b9aad; font-weight: 700; }
+  .nextbar .val { font-size: 13px; font-weight: 600; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nextbar .val.none { color: #9b9aad; font-weight: 400; }
+  #goBtn { flex: 0 0 auto; padding: 14px 26px; font-size: 14px; background: #ffcc02; color: #111; }
+  #goBtn:disabled { background: #3a3948; color: #6f6e80; cursor: default; transform: none; filter: none; }
+
+  /* ---------- Cue list ---------- */
+  .sechead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .sechead label { margin-bottom: 0; }
+  #cueList { margin-bottom: 8px; }
+  .cue {
+    display: flex; align-items: center; gap: 8px;
+    background: #23222f; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px;
+    border-left: 3px solid transparent;
+  }
+  .cue.active { border-left-color: #3ddc84; background: #2a2937; }
+  .cue.next { border-left-color: #ffcc02; }
+  .cue .idx { font-size: 11px; color: #6f6e80; width: 15px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .cue .name { flex: 1; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cue.active .name { color: #fff; }
+  .cue .dur { font-size: 12px; color: #9b9aad; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .cue.active .dur { color: #3ddc84; }
+  .cue button { flex: 0 0 auto; padding: 12px 12px; font-size: 11px; min-height: 44px; min-width: 44px; }
+  .cue .load { background: #454458; color: #f2f2f2; }
+  .cue .clear-on { background: #ff4d4f; color: #fff; }
+  .cue .edit { background: transparent; color: #6f6e80; padding: 12px 8px; font-size: 15px; }
+  .cue .edit:hover { color: #f2f2f2; }
+  .cue .del { background: transparent; color: #6f6e80; padding: 12px 8px; font-size: 14px; }
+  .cue .del:hover { color: #ff4d4f; }
+  .cue .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .empty { font-size: 12px; color: #6f6e80; text-align: center; padding: 10px 0 12px; }
+  .cue.draggable { cursor: grab; }
+  .cue.dragging { opacity: .4; }
+  .cue.drag-over { box-shadow: 0 -3px 0 0 #ffcc02; }
+  .cue .grip { color: #6f6e80; font-size: 15px; letter-spacing: 2px; cursor: grab; }
+
+  /* Setup rows sit quieter than live controls */
+  .setuprow { display: flex; gap: 6px; margin-bottom: 8px; opacity: .72; }
+  .setuprow:focus-within { opacity: 1; }
+  .setuprow input, .setuprow select { padding: 7px; font-size: 12px; }
+  .setuprow button { padding: 7px 10px; font-size: 10px; }
+
+  /* ---------- Messages ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #454458; color: #f2f2f2; border-radius: 16px;
+    padding: 8px 12px; font-size: 11px; font-weight: 700; cursor: pointer;
+    letter-spacing: .04em; border: none; font-family: inherit; flex: 0 0 auto;
+    max-width: 100%;
+  }
+  .chip:hover { filter: brightness(1.15); }
+  .chip.on { background: #ffcc02; color: #111; }
+  .chip .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip .x { color: inherit; opacity: .5; font-size: 15px; line-height: 1; padding: 4px 2px 4px 6px; }
+  .chip .x:hover { opacity: 1; }
+  .chip.add { background: #23222f; color: #9b9aad; }
+  #clearAllBtn { background: #3a3948; color: #6f6e80; }
+  #clearAllBtn.armed { background: #ff4d4f; color: #fff; }
+  /* Space is reserved even when idle, so the chips never slide out from under
+     your finger the moment a message goes to air. */
+  .onair {
+    font-size: 11px; color: #ffcc02; background: #332d14; border-radius: 7px;
+    padding: 8px 11px; margin-bottom: 8px; min-height: 30px; font-weight: 700;
+    letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    visibility: hidden;
+  }
+  .onair.show { visibility: visible; }
+
+  /* ---------- Modals ---------- */
+  #settingsModal, #cueModal, #askModal, #importModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+  }
+  #settingsModal.open, #cueModal.open, #askModal.open, #importModal.open { display: flex; }
+  /* Above the settings inspector, since it can be raised from inside it. */
+  #askModal { z-index: 14; }
+
+  /* CSV import */
+  .csvspec { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 12px; }
+  .csvspec td { padding: 4px 6px; border-bottom: 1px solid #35344a; vertical-align: top; }
+  .csvspec td:first-child {
+    width: 130px; color: #ffcc02; font-weight: 700; font-family: var(--mono, monospace);
+  }
+  .csvspec td:last-child { color: #9b9aad; }
+  .csvpreview { max-height: 190px; overflow: auto; }
+  .csvrow {
+    display: flex; gap: 8px; align-items: center; font-size: 12px;
+    padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; background: #23222f;
+  }
+  .csvrow.bad { background: #3a1214; }
+  .csvrow .n { color: #6f6e80; width: 20px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .csvrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .csvrow .dt { color: #9b9aad; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .csvrow .err { color: #ff8f90; font-size: 11px; flex: 1; }
+  .panel {
+    background: #2c2b3b; border: 1px solid #454458; border-radius: 12px;
+    padding: 22px; width: 540px; max-height: 88vh; overflow: auto;
+  }
+  .panel h2 { font-size: 12px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: #ffcc02; margin-bottom: 14px; }
+  .crow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .crow > label { flex: 1; margin-bottom: 0; }
+  .crow input[type="color"] { flex: 0 0 52px; height: 34px; padding: 2px; border: 1px solid #454458; border-radius: 8px; background: #23222f; cursor: pointer; }
+  .crow input[type="range"] { flex: 0 0 160px; }
+  .crow select, .crow input[type="number"] { flex: 0 0 160px; }
+  .crow input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; accent-color: #ffcc02; }
+  .crow .val { flex: 0 0 44px; font-size: 12px; color: #9b9aad; text-align: right; }
+  .crow input[type="file"] { display: none; }
+  .logo-thumb { flex: 0 0 auto; max-height: 30px; max-width: 90px; border-radius: 4px; background: #111; padding: 2px; }
+  .keychip {
+    flex: 0 0 auto; min-width: 64px; text-align: center; font-size: 12px; font-weight: 700;
+    background: #111; border: 1px solid #454458; border-radius: 6px; padding: 7px 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .keychip.listening { border-color: #ffcc02; color: #ffcc02; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 260px; }
+  .swatch { width: 24px; height: 24px; border-radius: 6px; cursor: pointer; border: 1px solid #454458; }
+  .swatch.sel { outline: 2px solid #fff; }
+  .swatch.none { background: repeating-linear-gradient(45deg, #23222f, #23222f 4px, #454458 4px, #454458 6px); }
+
+  /* ---------- Top bar menu ---------- */
+  .menuwrap { position: relative; }
+  .menu {
+    display: none; position: absolute; top: calc(100% + 5px); right: 0; min-width: 220px;
+    background: #23222f; border: 1px solid #454458; border-radius: 10px;
+    padding: 6px; z-index: 12;
+  }
+  .menu.open { display: block; }
+  .mi {
+    display: block; width: 100%; text-align: left; background: transparent;
+    color: #f2f2f2; font-size: 12px; padding: 12px 12px; border-radius: 7px;
+    text-transform: none; letter-spacing: 0; font-weight: 600;
+  }
+  .mi:hover { background: #2f2e3d; filter: none; }
+  .mi.on { color: #3ddc84; }
+  .misep { height: 1px; background: #35344a; margin: 5px 4px; }
+
+  /* Lock state. Green = safe to touch, amber = live and guarded. Amber is reserved
+     for warning-ish meaning now, so an unlocked rundown is the quiet state. */
+  .lockbtn.locked { background: #1d5c3a; color: #8ff0bd; }
+
+  /* ---------- Settings tabs ---------- */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid #454458; }
+  .tab { min-height: 40px;
+    flex: 0 0 auto; background: transparent; color: #9b9aad; font-size: 11px;
+    padding: 10px 12px; border-radius: 8px 8px 0 0; letter-spacing: .08em;
+  }
+  .tab:hover { background: #262532; filter: none; }
+  .tab.on { background: #23222f; color: #ffcc02; }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+
+  /* ---------- Network links ---------- */
+  .netlinks { font-size: 11px; color: #9b9aad; line-height: 1.6; }
+  .netlinks b { color: #f2f2f2; font-weight: 700; }
+  .netlinks .u {
+    display: inline-block; background: #23222f; border-radius: 5px;
+    padding: 2px 6px; margin: 1px 0; color: #ffcc02; cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .netlinks .u:hover { filter: brightness(1.25); }
+  .netlinks .warn { color: #ff8f90; }
+
+  /* ---------- Show lock ---------- */
+  /* Never on at launch. When locked, the rundown and presets become read-only: the
+     edit/delete affordances are gone rather than merely disabled, so there is nothing
+     to mis-hit next to Load and nothing to mis-hit inside a message chip. */
+  body.locked .cue .edit,
+  body.locked .cue .del,
+  body.locked .chip .x,
+  body.locked #reorderBtn,
+  body.locked .setuprow { display: none; }
+  body.locked #cueList { margin-bottom: 0; }
+  .lockhint { font-size: 10px; color: #6f6e80; display: none; }
+  body.locked .lockhint { display: inline; }
+
+  /* Persistent flag whenever the clock speed is not 1.00x. The slider now lives in
+     Settings, so without this the show could be silently retimed with no evidence. */
+  .speedflag {
+    display: none; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 700; color: #111; background: #ffcc02; border-radius: 5px;
+    padding: 3px 7px; margin-left: 8px;
+  }
+  body.speedy .speedflag { display: inline-block; }
+
+  /* ---------- Simple mode ---------- */
+  /* Set a time, run it, put it on a screen. Everything cue-, message- and
+     schedule-related is hidden; the underlying data is untouched, so switching back
+     restores the lot. */
+  .simpleonly { display: none; }
+  body.simple .simpleonly { display: block; }
+  body.simple .col-right,
+  body.simple .schedwrap,
+  body.simple .nextbar,
+  body.simple #undoBtn,
+  body.simple #lockBtn,
+  body.simple .speedrow,
+  body.simple .mhead { display: none; }
+  /* Simple mode has no cue list, so a schedule strip has nothing to schedule. */
+  body.simple .schedwrap { display: none; }
+  body.simple .cols { grid-template-columns: minmax(0,1fr); }
+  /* With no cue list there is no "manual" to take — it's just the timer, so drop the
+     amber accent that would otherwise be on permanently. */
+  body.simple .manualblock { border-color: #454458; background: #262532; margin-top: 12px; }
+  body.simple .manualblock .mbody { opacity: 1; }
+  body.simple #modeBtn { background: #ffcc02; color: #111; }
+
+  /* ---------- Touch mode ---------- */
+  body.touch { padding: 18px 20px 20px; }
+  body.touch button { padding: 16px 12px; font-size: 14px; }
+  body.touch .small { padding: 12px 16px; font-size: 12px; }
+  body.touch .transport #startBtn { padding: 26px 8px; font-size: 18px; }
+  body.touch .transport .reset, body.touch .transport .quick { padding: 26px 8px; font-size: 14px; }
+  body.touch .adds button { padding: 16px 6px; font-size: 13px; }
+  body.touch #goBtn { padding: 20px 32px; font-size: 16px; }
+  body.touch .cue { padding: 12px 12px; margin-bottom: 8px; }
+  body.touch .cue button { padding: 11px 14px; font-size: 12px; }
+  body.touch .cue .name { font-size: 15px; }
+  body.touch .cue .dur { font-size: 14px; }
+  body.touch .chip { padding: 13px 18px; font-size: 13px; }
+  body.touch .chip .x { font-size: 16px; padding: 0 2px; }
+  body.touch input[type="number"], body.touch input[type="text"], body.touch select { padding: 14px; font-size: 17px; }
+  body.touch .setuprow { opacity: 1; }
+  body.touch .mbody #setManualBtn { flex: 0 0 92px; padding: 15px 8px; }
+  body.touch .popfield input[type="time"] { padding: 15px; font-size: 20px; }
+  body.touch .schedpop { padding: 18px; }
+  body.touch .setuprow input, body.touch .setuprow select { padding: 12px; font-size: 15px; }
+  body.touch .setuprow button { padding: 12px 14px; font-size: 12px; }
+  body.touch .crow input[type="checkbox"] { width: 26px; height: 26px; }
+  body.touch .swatch { width: 34px; height: 34px; }
+  body.touch .keychip { padding: 12px 14px; font-size: 14px; }
+  body.touch label { font-size: 10px; }
+</style>
+</head>
+<body>
+
+  <div id="boot">
+    <div class="mark">soundcredit<span>.tv</span></div>
+    <div class="bar"><i></i></div>
+    <div class="msg">Loading</div>
+  </div>
+
+  <div class="topbar">
+    <div class="brand">
+      <h1>soundcredit<span class="tv">.tv</span></h1>
+      <span class="tagline">StageCredit — Control</span>
+    </div>
+    <div class="topbar-right">
+      <span class="outstatus" id="outStatus" title="Display output"><span class="outdot" id="outDot"></span><span id="outLabel">no output</span></span>
+      <button class="small lockbtn" id="lockBtn" title="Lock the rundown so it can't be edited by accident">Unlocked</button>
+      <button class="small" id="undoBtn" title="Undo">Undo</button>
+      <div class="menuwrap">
+        <button class="small" id="showMenuBtn">Show &#9662;</button>
+        <div class="menu" id="showMenu">
+          <button class="mi" id="newShowBtn">New show</button>
+          <button class="mi" id="saveShowBtn">Save show&hellip;</button>
+          <button class="mi" id="loadShowBtn">Load show&hellip;</button>
+          <div class="misep"></div>
+          <button class="mi" id="importBtn">Import rundown (CSV)&hellip;</button>
+          <button class="mi" id="asRunBtn">Export as-run log&hellip;</button>
+          <div class="misep"></div>
+          <button class="mi" id="modeBtn">Simple mode</button>
+        </div>
+      </div>
+      <button class="small" id="settingsBtn">Settings</button>
+    </div>
+  </div>
+
+
+  <div class="cols">
+
+    <div class="col-left">
+      <div class="clockwrap" id="preview">
+        <div class="clockmeta">
+          <span class="statelabel" id="stateLabel">Stopped</span><span class="speedflag" id="speedFlag">1.00×</span>
+          <span class="endsat" id="endsAt"></span>
+        </div>
+        <span class="time" id="previewTime">10:00</span>
+        <div class="cuename" id="cueName"></div>
+        <div class="progress"><div id="progressFill"></div></div>
+      </div>
+      <div id="cueNotes"></div>
+
+      <div class="schedwrap">
+        <div class="schedhead">
+          <label>Show schedule <span class="hint">— set a start to track drift</span></label>
+          <button class="small" id="schedEditBtn">Set times</button>
+        </div>
+        <div class="schedbar" id="schedBar" title="Click to set the planned start and hard out">
+          <div class="sched">
+            <span class="lbl">Projected end</span>
+            <span class="val" id="schedEnd">—</span>
+          </div>
+          <div class="sched">
+            <span class="lbl">Drift vs plan</span>
+            <span class="val" id="schedDrift">—</span>
+          </div>
+          <div class="sched">
+            <span class="lbl">Slack to hard out</span>
+            <span class="val" id="schedSlack">—</span>
+          </div>
+        </div>
+
+        <div class="schedpop" id="schedPop">
+          <div class="poprow">
+            <div class="popfield">
+              <label for="schedStart">Planned start</label>
+              <input type="time" id="schedStart">
+              <span class="hint2">When the show is meant to begin. Drift is measured against this.</span>
+            </div>
+            <div class="popfield">
+              <label for="schedHardOut">Hard out</label>
+              <input type="time" id="schedHardOut">
+              <span class="hint2">The latest you can finish. Slack counts down to it.</span>
+            </div>
+          </div>
+          <div class="popsum" id="schedSummary"></div>
+          <div class="row" style="margin-bottom:0">
+            <button class="reset" id="schedClear">Clear both</button>
+            <button class="send" id="schedDone">Done</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button class="start" id="startBtn"><span id="startLabel">Start</span></button>
+        <button class="reset" id="resetBtn">Reset</button>
+        <button class="quick" id="todBtn" title="Show time of day on the display">TOD</button>
+        <span class="spacer"></span>
+        <button id="blackBtn" title="Hold to blank the display output"><span class="fill" id="blackFill"></span><span id="blackLabel">Hold to blank</span></button>
+      </div>
+
+      <div class="adds">
+        <button class="quick" data-add="-60">−1 min</button>
+        <button class="quick" data-add="60">+1 min</button>
+        <button class="quick" data-add="300">+5 min</button>
+      </div>
+
+      <div class="nextbar">
+        <div class="meta">
+          <div class="lbl">Next</div>
+          <div class="val none" id="nextVal">End of cue list</div>
+        </div>
+        <button id="goBtn" disabled>GO</button>
+      </div>
+
+      <div class="manualblock" id="manualBlock">
+        <div class="mhead">
+          <span class="mlabel" id="manualState">Manual</span>
+          <button class="small" id="manualBtn">Take manual</button>
+        </div>
+        <label class="simpleonly">Timer</label>
+        <div class="mbody">
+          <div><label>Minutes</label><input type="number" id="min" min="0" max="999" value="10"></div>
+          <div><label>Seconds</label><input type="number" id="sec" min="0" max="59" value="0"></div>
+          <button class="quick" id="setManualBtn">Set</button>
+        </div>
+      </div>
+
+      <div class="speedrow" id="speedRow">
+        <div class="shead">
+          <span class="slbl">Clock speed</span>
+          <button class="small" id="speedReset">Reset to 1.00×</button>
+        </div>
+        <div class="sbody">
+          <input type="range" id="speed" min="0.8" max="1.2" step="0.01" value="1" disabled>
+          <span class="sval" id="speedVal">1.00×</span>
+        </div>
+        <button class="armveil" id="speedVeil">Clock speed <b id="speedVeilVal">1.00×</b> — click to adjust</button>
+      </div>
+    </div>
+
+    <div class="col-right">
+      <div class="sechead">
+        <label>Cue list <span class="lockhint">— locked, read only</span></label>
+        <button class="small" id="reorderBtn">Reorder</button>
+      </div>
+      <div id="cueList"></div>
+      <div class="setuprow">
+        <input type="text" id="cueNameIn" placeholder="Cue name" style="flex:2">
+        <input type="number" id="cueMin" min="0" max="999" placeholder="mm" style="flex:0 0 52px">
+        <input type="number" id="cueSec" min="0" max="59" placeholder="ss" style="flex:0 0 52px">
+        <button id="addTodBtn" class="quick" title="Make this a time-of-day cue" style="flex:0 0 48px">TOD</button>
+        <button id="addCueBtn" style="flex:0 0 48px">Add</button>
+      </div>
+
+      <hr>
+
+      <div class="sechead"><label>Messages</label></div>
+      <div class="onair" id="onAir"></div>
+      <div class="chips" id="msgList"></div>
+      <div class="row">
+        <button id="clearAllBtn">Clear message</button>
+      </div>
+      <div class="setuprow">
+        <input type="text" id="msg" placeholder="One-off message…" maxlength="60" style="flex:1">
+        <button class="send" id="sendMsgBtn" style="flex:0 0 74px">Send</button>
+      </div>
+      <div class="setuprow">
+        <input type="text" id="msgNameIn" placeholder="Save a new preset" maxlength="60" style="flex:1">
+        <button id="addMsgBtn" style="flex:0 0 48px">Add</button>
+      </div>
+    </div>
+
+  </div>
+
+  
+
+  <div id="cueModal">
+    <div class="panel">
+      <h2>Edit cue</h2>
+
+      <div class="crow">
+        <label>Name</label>
+        <input type="text" id="ceName" maxlength="60" style="flex:0 0 260px">
+      </div>
+
+      <div class="crow">
+        <label>Type</label>
+        <select id="ceType">
+          <option value="timer">Countdown</option>
+          <option value="countup">Count up</option>
+          <option value="tod">Time of day</option>
+        </select>
+      </div>
+
+      <div class="crow">
+        <label>Duration</label>
+        <input type="number" id="ceMin" min="0" max="999" placeholder="mm" style="flex:0 0 76px">
+        <input type="number" id="ceSec" min="0" max="59" placeholder="ss" style="flex:0 0 76px">
+      </div>
+
+      <div class="crow">
+        <label>Speaker / subtitle</label>
+        <input type="text" id="ceSub" maxlength="60" placeholder="Optional" style="flex:0 0 260px">
+      </div>
+
+      <div class="crow"><label>Show name on display</label><input type="checkbox" id="ceShowName"></div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Timer colour</label>
+        <div class="swatches" id="ceColors"></div>
+      </div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Background tint</label>
+        <div class="swatches" id="ceBgs"></div>
+      </div>
+
+      <div class="crow">
+        <label>Warning threshold (blank = global)</label>
+        <input type="number" id="ceWarnAt" min="0" max="3600" placeholder="global">
+      </div>
+
+      <div class="crow">
+        <label>At zero</label>
+        <select id="ceOvertime">
+          <option value="countup">Count overtime (+1:23)</option>
+          <option value="stop">Stop and hold 0:00</option>
+        </select>
+      </div>
+
+      <div class="crow"><label>Auto-follow — start next cue at zero</label><input type="checkbox" id="ceFollow"></div>
+
+      <div class="crow">
+        <label>Scheduled start (time of day)</label>
+        <input type="time" id="ceSched" style="flex:0 0 110px">
+        <button class="small" id="ceSchedClear" style="flex:0 0 auto">Clear</button>
+      </div>
+
+      <div class="crow">
+        <label>Auto message</label>
+        <input type="text" id="ceAutoMsg" maxlength="60" placeholder="e.g. WRAP UP" style="flex:0 0 170px">
+        <input type="number" id="ceAutoMsgAt" min="1" max="3600" placeholder="secs" title="Seconds remaining when it appears" style="flex:0 0 80px">
+      </div>
+
+      <div class="crow" style="align-items:flex-start">
+        <label style="padding-top:6px">Notes (controller only)</label>
+        <textarea id="ceNotesIn" rows="2" maxlength="200" style="flex:0 0 260px; background:#23222f; color:#f2f2f2; border:1px solid #454458; border-radius:8px; padding:8px; font-family:inherit; font-size:13px; resize:vertical;"></textarea>
+      </div>
+
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="ceDupBtn">Duplicate</button>
+        <button class="reset" id="ceCancelBtn">Cancel</button>
+        <button class="send" id="ceSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="askModal">
+    <div class="panel" style="width:420px">
+      <h2 id="askTitle">Confirm</h2>
+      <div class="popsum" id="askBody" style="margin-bottom:14px"></div>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="askCancel">Cancel</button>
+        <button class="send" id="askOk">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal">
+    <div class="panel" style="width:640px">
+      <h2>Settings</h2>
+      <div class="tabs">
+        <button class="tab on" data-tab="output">Output</button>
+        <button class="tab" data-tab="network">Network</button>
+        <button class="tab" data-tab="style">Style</button>
+        <button class="tab" data-tab="keys">Shortcuts</button>
+        <button class="tab" data-tab="behaviour">Behaviour</button>
+      </div>
+
+      <div class="tabpane on" id="tab-output">
+        <label>Which output these controls act on</label>
+        <div class="row">
+          <select id="viewSel" style="flex:1">
+            <option value="presenter">Presenter view — name, messages, next up</option>
+            <option value="clock">Clock only — for FOH or a confidence monitor</option>
+          </select>
+        </div>
+        <div class="row">
+          <select id="displaySel" style="flex:1"></select>
+        </div>
+        <div class="row">
+          <button class="small" id="fsBtn" style="flex:1">Fullscreen</button>
+          <button class="small" id="exitFsBtn" style="flex:1">Exit FS</button>
+          <button class="small" id="reopenBtn" style="flex:1">Open</button>
+          <button class="small" id="closeDispBtn" style="flex:1">Close</button>
+        </div>
+        <div class="popsum" id="viewState">&mdash;</div>
+      </div>
+
+      <div class="tabpane" id="tab-network">
+        <label>LAN server &mdash; <span id="netState">off</span></label>
+        <div class="row">
+          <input type="number" id="netPort" min="1024" max="65535" value="8080" style="flex:0 0 96px">
+          <button class="small" id="netBtn" style="flex:1">Start server</button>
+        </div>
+        <div class="netlinks" id="netLinks"></div>
+        <div class="hint2">Viewer pages are open and read&#8209;only. The remote and the Companion API need the token,
+          which is in the links above. Traffic is plain HTTP, so treat the token as visible on the network.</div>
+      </div>
+
+      <div class="tabpane" id="tab-style">
+        <div class="row" style="margin-bottom:12px">
+          <button class="reset" id="setDefaultsBtn" style="flex:1">Reset display style to defaults</button>
+        </div>
+
+      <div class="crow">
+        <label>Font</label>
+        <select id="setFont">
+          <option value="'Montserrat','Helvetica Neue',Helvetica,Arial,sans-serif">Montserrat</option>
+          <option value="'Helvetica Neue',Helvetica,Arial,sans-serif">Helvetica</option>
+          <option value="Arial,sans-serif">Arial</option>
+          <option value="'Arial Black',Arial,sans-serif">Arial Black</option>
+          <option value="Georgia,'Times New Roman',serif">Georgia</option>
+          <option value="'Courier New',monospace">Courier (mono)</option>
+        </select>
+      </div>
+
+      <div class="crow">
+        <label>Timer size</label>
+        <input type="range" id="setScale" min="0.5" max="1.5" step="0.05">
+        <span class="val" id="setScaleVal">100%</span>
+      </div>
+
+      <div class="crow"><label>Background colour</label><input type="color" id="setBg"></div>
+      <div class="crow"><label>Timer colour</label><input type="color" id="setTimerC"></div>
+      <div class="crow"><label>Message colour</label><input type="color" id="setMsgC"></div>
+      <div class="crow"><label>Warning colour</label><input type="color" id="setWarnC"></div>
+      <div class="crow"><label>Overtime colour</label><input type="color" id="setDangerC"></div>
+
+      <div class="crow">
+        <label>Warning threshold (seconds)</label>
+        <input type="number" id="setWarnAt" min="0" max="3600">
+      </div>
+
+      <div class="crow"><label>Flash when time runs out</label><input type="checkbox" id="setFlash"></div>
+      <div class="crow"><label>24-hour clock (TOD)</label><input type="checkbox" id="set24h"></div>
+      <div class="crow"><label>Show time of day alongside the timer</label><input type="checkbox" id="setTodAlongside"></div>
+      <div class="crow" id="todScaleRow">
+        <label>&nbsp;&nbsp;↳ size</label>
+        <input type="range" id="setTodScale" min="0.5" max="3" step="0.05">
+        <span class="val" id="setTodScaleVal">100%</span>
+      </div>
+      <div class="crow" id="todPosRow">
+        <label>&nbsp;&nbsp;↳ corner</label>
+        <select id="setTodPos">
+          <option value="tl">Top left</option>
+          <option value="tr">Top right</option>
+          <option value="bl">Bottom left</option>
+          <option value="br">Bottom right</option>
+        </select>
+      </div>
+      <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchMode"></div>
+      <div class="crow"><label>Show "next up" on the display</label><input type="checkbox" id="setShowNext"></div>
+      <div class="crow" id="nextAtRow">
+        <label>&nbsp;&nbsp;↳ appears when this much is left</label>
+        <input type="text" id="setNextAt" placeholder="2:00" style="flex:0 0 90px; text-align:center">
+        <span class="val" id="setNextAtVal" style="flex:0 0 90px">whole cue</span>
+      </div>
+      <div class="crow nextopt">
+        <label>&nbsp;&nbsp;↳ position</label>
+        <select id="setNextPos">
+          <option value="bottom">Bottom of screen</option>
+          <option value="top">Top of screen</option>
+        </select>
+      </div>
+      <div class="crow nextopt">
+        <label>&nbsp;&nbsp;↳ size</label>
+        <input type="range" id="setNextScale" min="0.5" max="3" step="0.05">
+        <span class="val" id="setNextScaleVal">100%</span>
+      </div>
+      <div class="crow"><label>Show soundcredit.tv wordmark</label><input type="checkbox" id="setBrand"></div>
+
+      <div class="crow">
+        <label>Custom logo (replaces wordmark)</label>
+        <img class="logo-thumb" id="logoThumb" style="display:none" alt="">
+        <input type="file" id="setLogo" accept="image/*">
+        <button class="small" id="logoPickBtn">Choose…</button>
+        <button class="small" id="logoClearBtn">Remove</button>
+      </div>      </div>
+
+      <div class="tabpane" id="tab-keys">
+        <div class="row" style="margin-bottom:12px">
+          <button class="reset" id="keysDefaultsBtn" style="flex:1">Reset shortcuts to defaults</button>
+        </div>
+      <div id="keyList"></div>
+      <div style="font-size:11px; color:#9b9aad; margin:4px 0 12px;">
+        Click a key to change it, then press the new key. Esc cancels. Shortcuts are ignored while typing in a field.
+      </div>      </div>
+
+      <div class="tabpane" id="tab-behaviour">
+        <div class="row" style="margin-bottom:6px">
+          <button class="small" id="schedFromSettings" style="flex:1">Set show schedule (planned start / hard out)&hellip;</button>
+        </div>
+        <div class="hint2">Also reachable from &ldquo;Set times&rdquo; above the transport.</div>
+        <hr>
+        <div class="crow"><label>Lock the rundown when GO is pressed</label><input type="checkbox" id="setLockOnGo"></div>
+        <div class="hint2">Starts every session unlocked. With this on, your first GO locks the cue list and message
+          presets against editing &mdash; unlock from the top bar when you need to change something.</div>
+        <hr>
+        <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchMode"></div>
+        <div class="hint2">Enlarges every hit target for touchscreen or tablet operation.</div>
+      </div>
+
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="send" id="settingsDone">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="importModal">
+    <div class="panel" style="width:600px">
+      <h2>Import rundown from CSV</h2>
+
+      <div class="popsum" style="margin-bottom:12px">
+        First row must be a header. Columns can be in any order, case doesn't matter,
+        and anything unrecognised is ignored. Only <b>name</b> and <b>duration</b> are
+        needed — everything else falls back to a sensible default.
+      </div>
+
+      <table class="csvspec">
+        <tr><td>name</td><td>Cue name</td></tr>
+        <tr><td>duration</td><td><b>mm:ss</b> or <b>h:mm:ss</b>, or a plain number for seconds</td></tr>
+        <tr><td>type</td><td>timer (default) · countup · tod</td></tr>
+        <tr><td>speaker</td><td>Subtitle shown under the name</td></tr>
+        <tr><td>show_name</td><td>yes / no — put the name on the display</td></tr>
+        <tr><td>warn_at</td><td>Seconds remaining for the warning colour (blank = global)</td></tr>
+        <tr><td>overtime</td><td>countup (default) · stop</td></tr>
+        <tr><td>auto_follow</td><td>yes / no — start the next cue at zero</td></tr>
+        <tr><td>scheduled_start</td><td>HH:MM — fire this cue at a time of day</td></tr>
+        <tr><td>auto_message</td><td>Message to raise near the end</td></tr>
+        <tr><td>auto_message_at</td><td>Seconds remaining when it appears</td></tr>
+        <tr><td>notes</td><td>Operator-only note</td></tr>
+      </table>
+
+      <div class="row">
+        <button class="small" id="csvTemplateBtn" style="flex:1">Download template CSV</button>
+        <button class="small" id="csvChooseBtn" style="flex:1">Choose a CSV file…</button>
+      </div>
+
+      <div id="csvResult" style="display:none">
+        <hr>
+        <div class="popsum" id="csvSummary" style="margin-bottom:10px"></div>
+        <div id="csvPreview" class="csvpreview"></div>
+      </div>
+
+      <hr>
+      <div class="row" style="margin-bottom:0">
+        <button class="reset" id="importCancelBtn">Cancel</button>
+        <button class="reset" id="csvAppendBtn" disabled>Append</button>
+        <button class="send" id="csvReplaceBtn" disabled>Replace cue list</button>
+      </div>
+    </div>
+  </div>
+
+    <script>
+  // Everything below is deferred behind two animation frames so the browser gets a
+  // chance to PAINT the boot overlay before we take the main thread. A corrupt
+  // Chromium localStorage store once made the first read block for ~4s, and because
+  // the block started 2ms into the script there was no window for a first paint —
+  // launch looked dead rather than loading. Cheap insurance against a repeat.
+  function initApp() {
+  const $ = (id) => document.getElementById(id);
+
+  let remaining = 600;      // seconds
+  let running = false;
+  let lastTick = null;
+  let message = '';
+  let speed = 1;            // clock speed multiplier (gaslight mode)
+  let activeCue = -1;
+  let todMode = false;      // display shows time of day instead of countdown
+  let countUp = false;      // stopwatch mode (count up from zero)
+  let blackout = false;     // v2: blank the display output
+  // Read here rather than beside applySimple(): paintSchedule() and the
+  // scheduled-start interval both read it, and they run earlier in the file.
+  let simpleMode = localStorage.getItem('simpleMode') === '1';
+  // Cue armed by a digit key, awaiting GO. null = follow the natural next cue.
+  let armedCue = null;
+
+  // Normalise cues (upgrades older saved formats)
+  function normaliseCue(c) {
+    return {
+      name: c.name || 'Cue',
+      type: c.type || (c.tod ? 'tod' : 'timer'),
+      seconds: c.seconds || 0,
+      color: c.color || null,
+      bg: c.bg || null,
+      showName: !!c.showName,
+      subtitle: c.subtitle || '',
+      warnAt: (c.warnAt === 0 || c.warnAt) ? c.warnAt : null,
+      overtime: c.overtime || 'countup',
+      autoFollow: !!c.autoFollow,
+      schedStart: c.schedStart || null,
+      autoMsgText: c.autoMsgText || '',
+      autoMsgAt: c.autoMsgAt || 120,
+      notes: c.notes || ''
+    };
+  }
+  let cues = JSON.parse(localStorage.getItem('cues') || '[]').map(normaliseCue);
+
+  const DIGIT_COLORS = ['#f2f2f2','#ffcc02','#ff9f1c','#ff4d4f','#ff5da2','#b06bff','#4da6ff','#2ee6a8','#9be34f'];
+  const BG_TINTS = ['#3a1214','#3a2410','#3a3210','#10321f','#0f3330','#12233a','#2a1440','#3a1430','#26252f'];
+
+  // ---- Display settings ----
+  const defaultSettings = {
+    font: "'Montserrat','Helvetica Neue',Helvetica,Arial,sans-serif",
+    scale: 1,
+    bg: '#111111',
+    timerC: '#f2f2f2',
+    msgC: '#ffcc02',
+    warnC: '#ffcc02',
+    dangerC: '#ff4d4f',
+    warnAt: 60,
+    flash: true,
+    clock24: true,
+    todAlongside: false,
+    todScale: 1,
+    todPos: 'tl',
+    showNext: false,
+    nextAt: 0,          // seconds remaining when "next up" appears; 0 = whole cue
+    nextPos: 'bottom',
+    nextScale: 1,
+    brand: true,
+    logo: null
+  };
+  let settings = Object.assign({}, defaultSettings,
+    JSON.parse(localStorage.getItem('displaySettings') || '{}'));
+
+  function saveSettings() { localStorage.setItem('displaySettings', JSON.stringify(settings)); }
+
+  function fmt(s) {
+    const neg = s < 0;
+    const a = Math.abs(Math.ceil(s));
+    const m = Math.floor(a / 60), r = a % 60;
+    return (neg ? '+' : '') + m + ':' + String(r).padStart(2, '0');
+  }
+
+  function fmtClock() {
+    const d = new Date();
+    let h = d.getHours();
+    if (!settings.clock24) { h = h % 12 || 12; }
+    return [h, d.getMinutes(), d.getSeconds()]
+      .map((n, idx) => idx === 0 && !settings.clock24 ? String(n) : String(n).padStart(2, '0')).join(':');
+  }
+
+  function fmtUp(s) {
+    const a = Math.max(0, Math.floor(s));
+    return Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+
+  // v2: wall-clock time this cue finishes, accounting for clock speed
+  function fmtEndsAt(secsLeft) {
+    const realSecs = secsLeft / (speed || 1);
+    const d = new Date(Date.now() + realSecs * 1000);
+    let h = d.getHours();
+    const suffix = settings.clock24 ? '' : (h < 12 ? 'am' : 'pm');
+    if (!settings.clock24) h = h % 12 || 12;
+    return (settings.clock24 ? String(h).padStart(2, '0') : String(h))
+      + ':' + String(d.getMinutes()).padStart(2, '0') + suffix;
+  }
+
+  // ---- Backtiming ----
+  // plannedStart / hardOut are "HH:MM" strings or null. Both optional: with neither
+  // set the schedule column still shows projected clock times, you just don't get
+  // drift or slack. Anchored to today; a target earlier in the day than the planned
+  // start is treated as tomorrow, so shows crossing midnight work.
+  let plannedStart = localStorage.getItem('plannedStart') || '';
+  let hardOut = localStorage.getItem('hardOut') || '';
+
+  function saveSchedule() {
+    localStorage.setItem('plannedStart', plannedStart);
+    localStorage.setItem('hardOut', hardOut);
+  }
+
+  // "HH:MM" -> Date today. Returns null on empty/malformed input.
+  function hhmmToDate(s, afterRef) {
+    if (!s || !/^\d{1,2}:\d{2}$/.test(s)) return null;
+    const [h, m] = s.split(':').map(Number);
+    if (h > 23 || m > 59) return null;
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    if (afterRef && d < afterRef) d.setDate(d.getDate() + 1);  // crossed midnight
+    return d;
+  }
+
+  function fmtTod(d) {
+    let h = d.getHours();
+    const suffix = settings.clock24 ? '' : (h < 12 ? 'am' : 'pm');
+    if (!settings.clock24) h = h % 12 || 12;
+    return (settings.clock24 ? String(h).padStart(2, '0') : String(h))
+      + ':' + String(d.getMinutes()).padStart(2, '0') + suffix;
+  }
+
+  // Signed duration as +/-M:SS, for drift and slack.
+  function fmtSigned(secs) {
+    const s = Math.round(secs);
+    const sign = s < 0 ? '−' : '+';
+    const a = Math.abs(s);
+    return sign + Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+
+  // A cue's contribution to the timeline. Count-up and time-of-day cues have no
+  // knowable duration, so they contribute nothing and are flagged as breaking the
+  // chain — everything after them is a guess, and the UI says so.
+  function cueDuration(cue) {
+    return cue.type === 'timer' ? cue.seconds : 0;
+  }
+  function cueIsIndeterminate(cue) {
+    return cue.type !== 'timer';
+  }
+
+  // Pure: given the current clock state, produce projected wall-clock times.
+  // Returns { etas[], projectedEnd, plannedEnd, drift, slack, indeterminate }.
+  function computeSchedule(now) {
+    now = now || new Date();
+    const etas = new Array(cues.length).fill(null);
+    let indeterminate = false;
+
+    // Where does the live timeline start? If a cue is loaded, from the moment that
+    // cue is projected to finish (clamped to now — an overrun cue isn't in the past,
+    // it's late). Otherwise from now.
+    let cursor;
+    let firstUnknown = activeCue >= 0 ? activeCue + 1 : 0;
+    if (activeCue >= 0) {
+      const live = todMode || countUp ? 0 : Math.max(0, remaining) / (speed || 1);
+      cursor = new Date(now.getTime() + live * 1000);
+      etas[activeCue] = new Date(now.getTime());          // running now
+      if (cueIsIndeterminate(cues[activeCue])) indeterminate = true;
+    } else {
+      // Manual override: whatever's on the manual clock still has to elapse before
+      // cue 1 can start, so count it — but only if it's actually counting down.
+      const manualLeft = (running && !todMode && !countUp && remaining > 0)
+        ? remaining / (speed || 1) : 0;
+      cursor = new Date(now.getTime() + manualLeft * 1000);
+      // Nothing has run yet and the planned start is still ahead of us: the show
+      // begins then, not now. Without this the projection read "if I started this
+      // second", so at 08:00 a 09:00 show reported an hour ahead of schedule — an
+      // alarming number to walk past on a show morning, and meaningless until the
+      // first GO. Once anything is loaded or running, live timing takes over.
+      if (!running) {
+        const plan = hhmmToDate(plannedStart);
+        if (plan && plan > cursor) cursor = plan;
+      }
+    }
+
+    for (let i = firstUnknown; i < cues.length; i++) {
+      etas[i] = new Date(cursor.getTime());
+      if (cueIsIndeterminate(cues[i])) indeterminate = true;
+      cursor = new Date(cursor.getTime() + cueDuration(cues[i]) / (speed || 1) * 1000);
+    }
+    const projectedEnd = cursor;
+
+    // Planned timeline is static: planned start plus every cue's nominal duration.
+    const start = hhmmToDate(plannedStart);
+    let plannedEnd = null;
+    if (start) {
+      const total = cues.reduce((a, c) => a + cueDuration(c), 0);
+      plannedEnd = new Date(start.getTime() + total * 1000);
+      if (plannedEnd < start) plannedEnd.setDate(plannedEnd.getDate() + 1);
+    }
+
+    const target = hhmmToDate(hardOut, start || now);
+    return {
+      etas,
+      projectedEnd,
+      plannedEnd,
+      drift: plannedEnd ? (projectedEnd - plannedEnd) / 1000 : null,
+      slack: target ? (target - projectedEnd) / 1000 : null,
+      indeterminate
+    };
+  }
+
+  // v2: state bar, ends-at, progress, next cue.
+  // renderStatus runs every animation frame, so every write is memoised —
+  // only touch the DOM when the value actually changed.
+  const lastPaint = {};
+  function setText(id, val) {
+    if (lastPaint[id] === val) return;
+    lastPaint[id] = val;
+    $(id).textContent = val;
+  }
+  // v2: the manual block states plainly who owns the clock — a cue, or you.
+  function renderManual() {
+    const manual = activeCue < 0;
+    $('manualBlock').classList.toggle('on', manual);
+    $('manualBtn').disabled = manual;
+    setText('manualBtn', manual ? 'Manual active' : 'Take manual');
+    setText('manualState', manual
+      ? 'Manual — load a cue to hand back'
+      : 'Cue ' + (activeCue + 1) + ' "' + cues[activeCue].name + '" owns the clock');
+    $('min').disabled = $('sec').disabled = !manual;
+    $('setManualBtn').disabled = !manual;
+  }
+
+  function renderStatus() {
+    const wrap = $('preview');
+    const over = !todMode && !countUp && remaining <= 0;
+    wrap.classList.toggle('running', running && !over);
+    wrap.classList.toggle('paused', !running && !todMode && (countUp || remaining > 0));
+    wrap.classList.toggle('over', over);
+
+    let label;
+    if (blackout) label = 'Blanked';
+    else if (todMode) label = 'Time of day';
+    else if (over) label = running ? 'Overtime' : 'Time up';
+    else if (running) label = 'Running';
+    else label = 'Paused';
+    label += activeCue >= 0 ? ' · cue ' + (activeCue + 1) : ' · manual';
+    setText('stateLabel', label);
+    renderManual();
+
+    setText('endsAt',
+      (!todMode && !countUp && remaining > 0) ? 'ends ' + fmtEndsAt(remaining) : '');
+
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+    let pct = 0;
+    if (!todMode && !countUp) {
+      const total = cue && cue.type === 'timer' ? cue.seconds : null;
+      if (total > 0) pct = Math.min(100, Math.max(0, (1 - remaining / total) * 100));
+      else if (remaining <= 0) pct = 100;
+    }
+    $('progressFill').style.width = pct + '%';
+
+    // An armed cue (set by a digit key) overrides the natural next.
+    const autoIdx = activeCue >= 0 ? activeCue + 1 : (cues.length ? 0 : -1);
+    const nextIdx = (armedCue != null && cues[armedCue]) ? armedCue : autoIdx;
+    const next = nextIdx >= 0 ? cues[nextIdx] : null;
+    const nv = $('nextVal');
+    if (next) {
+      nv.className = 'val' + (armedCue != null ? ' armed' : '');
+      setText('nextVal', (armedCue != null ? 'ARMED  ' : '') + (nextIdx + 1) + '. ' + next.name + ' — '
+        + (next.type === 'tod' ? 'TOD' : next.type === 'countup' ? 'Count up' : fmt(next.seconds)));
+      $('goBtn').disabled = false;
+      $('goBtn').dataset.idx = String(nextIdx);
+    } else {
+      nv.className = 'val none';
+      setText('nextVal', cues.length ? 'End of cue list' : 'No cues yet');
+      $('goBtn').disabled = true;
+      delete $('goBtn').dataset.idx;
+    }
+
+  }
+
+  // The next cue's name, or '' to hide it. Empty string is the single signal the
+  // display acts on, so all the conditions live here rather than being split across
+  // both windows.
+  function nextUpName() {
+    if (!settings.showNext || simpleMode) return '';
+    if (activeCue < 0) return '';
+    const next = cues[activeCue + 1];
+    if (!next) return '';                       // nothing after this one
+    const at = settings.nextAt || 0;
+    if (!at) return next.name;                  // 0 = up for the whole cue
+    // Count-up and time-of-day cues have no knowable end, so a "time remaining"
+    // threshold can't be evaluated. Show it rather than have the feature silently
+    // never fire on those cue types.
+    if (todMode || countUp) return next.name;
+    return remaining <= at ? next.name : '';    // <= 0 keeps it up through overtime
+  }
+
+  // The wire state: small, and sent many times a second. Deliberately excludes
+  // settings — those go on their own channel only when they change, because the
+  // custom logo is a base64 data URL up to 3MB and this used to ride along in every
+  // single animation frame.
+  function buildState() {
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+    const warnAt = (cue && cue.warnAt != null) ? cue.warnAt : settings.warnAt;
+    return {
+      remaining,
+      running,
+      message,
+      tod: todMode,
+      countup: countUp,
+      blackout,
+      danger: !todMode && !countUp && remaining <= 0,
+      warning: !todMode && !countUp && remaining > 0 && remaining <= warnAt,
+      cueTitle: cue && cue.showName ? cue.name : '',
+      cueSub: cue && cue.showName ? cue.subtitle : '',
+      cueColor: cue ? cue.color : null,
+      cueBg: cue ? cue.bg : null,
+      // Next cue's name for the presenter. Sent regardless of that cue's own
+      // showName flag — "next up" is opted into globally in Customise, so the
+      // operator has already decided the audience-facing screen can show names.
+      nextName: nextUpName(),
+      // context the remote and the API want, but the display ignores
+      cueIndex: activeCue,
+      cueName: cue ? cue.name : '',
+      cueCount: cues.length,
+      speed,
+      simple: simpleMode
+    };
+  }
+
+  // Settings travel separately, only on change. pushSettings is called from
+  // settingChanged() and once at startup.
+  function pushSettings() { window.timerAPI.sendSettings(settings); }
+
+  // 10Hz is ample: the displayed clock is M:SS, so it can only change once a second,
+  // and warning/overtime are CSS classes. The control panel's own preview still
+  // repaints every frame below — only the wire is throttled.
+  const PUSH_MS = 100;
+  let lastPush = 0;
+
+  function broadcast(force) {
+    const state = buildState();
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+
+    const now = performance.now();
+    if (force || now - lastPush >= PUSH_MS) {
+      lastPush = now;
+      window.timerAPI.sendUpdate(state);
+    }
+
+    $('previewTime').textContent = todMode ? fmtClock() : countUp ? fmtUp(remaining) : fmt(remaining);
+    $('cueName').textContent = cue ? (cue.name + (cue.subtitle ? ' — ' + cue.subtitle : '')) : '';
+    const pv = $('preview');
+    pv.style.background = state.cueBg || settings.bg;
+    pv.style.fontFamily = settings.font;
+    $('previewTime').style.color = state.danger ? settings.dangerC
+      : state.warning ? settings.warnC : (state.cueColor || settings.timerC);
+    const notes = cue && cue.notes;
+    $('cueNotes').style.display = notes ? 'block' : 'none';
+    $('cueNotes').textContent = notes || '';
+    // label lives in its own span so the key hint isn't wiped each frame
+    $('startLabel').textContent = running ? 'Pause' : 'Start';
+    $('startBtn').className = running ? 'pause' : 'start';
+    $('todBtn').className = todMode ? 'send' : 'quick';
+    renderStatus();
+  }
+
+  function loadCue(i, autoStart, now) {
+    const cue = cues[i];
+    if (!cue) return;
+    activeCue = i;
+    todMode = cue.type === 'tod';
+    countUp = cue.type === 'countup';
+    if (cue.type === 'timer') {
+      remaining = cue.seconds;
+      $('min').value = Math.floor(cue.seconds / 60);
+      $('sec').value = cue.seconds % 60;
+    } else if (cue.type === 'countup') {
+      remaining = 0;
+    }
+    running = !!autoStart && cue.type !== 'tod';
+    lastTick = now != null ? now : performance.now();
+    // Close off the outgoing cue before opening the new one, so the log has a
+    // planned-vs-actual pair for every cue that ran.
+    if (cueRunStart != null && cueRunIndex >= 0 && cueRunIndex !== i) closeCueRun();
+    cueRunIndex = i;
+    cueRunStart = Date.now();
+    cueRunPlanned = cue.type === 'timer' ? cue.seconds : null;
+    logRun('cue-load', { planned: cueRunPlanned, detail: cue.type });
+    renderCues();
+    broadcast(true);
+  }
+
+  // As-run bookkeeping for the cue currently on air.
+  let cueRunIndex = -1, cueRunStart = null, cueRunPlanned = null;
+  function closeCueRun() {
+    if (cueRunStart == null) return;
+    const actual = Math.round((Date.now() - cueRunStart) / 1000);
+    window.timerAPI.logEvent({
+      event: 'cue-end',
+      cue: cueRunIndex + 1,
+      cueName: cues[cueRunIndex] ? cues[cueRunIndex].name : '',
+      planned: cueRunPlanned,
+      actual,
+      overrun: cueRunPlanned != null ? actual - cueRunPlanned : null
+    });
+    cueRunStart = null; cueRunIndex = -1; cueRunPlanned = null;
+  }
+
+  function tick(now) {
+    if (running) {
+      const delta = ((now - lastTick) / 1000) * speed;
+      lastTick = now;
+      const prev = remaining;
+      remaining += countUp ? delta : -delta;
+      const cue = activeCue >= 0 ? cues[activeCue] : null;
+
+      if (!countUp && !todMode) {
+        // Auto message when crossing the cue's trigger point.
+        // The trigger is clamped to the cue's own length: a 30s cue carrying the
+        // default 120s trigger starts already past it, so a plain "crossed from
+        // above" test never fired and the message silently never appeared. Clamped,
+        // it fires on the first tick instead — which is what "warn me with 2 minutes
+        // left" means on a cue shorter than two minutes.
+        const trigger = cue && cue.type === 'timer'
+          ? Math.min(cue.autoMsgAt, cue.seconds) : (cue ? cue.autoMsgAt : 0);
+        if (cue && cue.autoMsgText && msgSource !== 'auto'
+            && prev >= trigger && remaining <= trigger && remaining > 0) {
+          message = cue.autoMsgText;
+          msgSource = 'auto';
+          renderMsgs();
+          updateCustomBtn();
+        }
+        // zero crossing
+        if (prev > 0 && remaining <= 0) {
+          if (msgSource === 'auto') {
+            message = '';
+            msgSource = null;
+            renderMsgs();
+            updateCustomBtn();
+          }
+          if (cue && cue.autoFollow && activeCue + 1 < cues.length) {
+            loadCue(activeCue + 1, true, now);
+            requestAnimationFrame(tick);
+            return;
+          }
+          if (cue && cue.overtime === 'stop') {
+            remaining = 0;
+            running = false;
+          }
+        }
+      }
+      broadcast();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // Scheduled starts — fire a cue at its time of day (once per day)
+  const schedFired = new WeakMap();
+  setInterval(() => {
+    // Never in simple mode: a hidden cue seizing the clock, with no cue list on
+    // screen to explain it, would be baffling.
+    if (simpleMode) return;
+    const d = new Date();
+    const cur = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const key = d.toDateString() + ' ' + cur;
+    cues.forEach((cue, i) => {
+      if (cue.schedStart === cur && schedFired.get(cue) !== key) {
+        schedFired.set(cue, key);
+        loadCue(i, true);
+      }
+    });
+  }, 1000);
+
+  function setFromInputs() {
+    const m = parseInt($('min').value, 10) || 0;
+    const s = parseInt($('sec').value, 10) || 0;
+    remaining = m * 60 + s;
+  }
+
+  // The reverse: put the live clock back into the mm/ss boxes when a cue hands the
+  // timer over to manual. Round ONCE to whole seconds and derive both fields from
+  // that — flooring minutes while ceiling seconds independently produced "1:60"
+  // for anything in the last fraction of a minute.
+  function syncInputsFromRemaining() {
+    const total = Math.max(0, Math.round(remaining));
+    $('min').value = Math.floor(total / 60);
+    $('sec').value = total % 60;
+  }
+
+  // ---- Backtiming render ----
+  // Deliberately NOT called from renderStatus/broadcast: those run every animation
+  // frame and this walks the whole cue list. Once a second is plenty for wall-clock
+  // times, and it writes in place rather than rebuilding rows.
+  function paintSchedule() {
+    if (simpleMode) return;   // hidden, so don't walk the cue list every second
+    // Three boxes reading "set a start" and "no hard out" were permanent dead space.
+    // The strip only earns its place once there is a schedule to report against.
+    const armed = !!(plannedStart || hardOut);
+    document.body.classList.toggle('hassched', armed);
+    if (!armed) return;
+    const s = computeSchedule();
+
+    document.querySelectorAll('#cueList .eta').forEach(el => {
+      const i = parseInt(el.dataset.idx, 10);
+      const eta = s.etas[i];
+      el.textContent = eta ? fmtTod(eta) : '';
+      el.title = eta ? 'Projected start ' + fmtTod(eta) : '';
+    });
+
+    const est = s.indeterminate ? '<span class="est">est</span>' : '';
+    const endBox = $('schedEnd').parentElement;
+    endBox.className = 'sched';
+    $('schedEnd').innerHTML = fmtTod(s.projectedEnd) + est;
+
+    const driftBox = $('schedDrift').parentElement;
+    if (s.drift === null) {
+      driftBox.className = 'sched idle';
+      $('schedDrift').textContent = 'set a start';
+    } else {
+      // A minute either side of plan is noise, not drift.
+      driftBox.className = 'sched ' + (s.drift > 60 ? 'late' : s.drift < -60 ? 'ahead' : '');
+      $('schedDrift').textContent = fmtSigned(s.drift) + (s.drift > 60 ? ' late' : s.drift < -60 ? ' ahead' : ' on plan');
+    }
+
+    const slackBox = $('schedSlack').parentElement;
+    if (s.slack === null) {
+      slackBox.className = 'sched idle';
+      $('schedSlack').textContent = 'no hard out';
+    } else {
+      slackBox.className = 'sched ' + (s.slack < 0 ? 'bust' : s.slack < 300 ? 'late' : 'ahead');
+      $('schedSlack').textContent = fmtSigned(s.slack) + (s.slack < 0 ? ' over' : '');
+    }
+  }
+
+  // ---- Undo ----
+  // Snapshots the *editable* show data only: cues, presets and which cue is loaded.
+  // It deliberately does NOT capture remaining/running, so an undo can never stop or
+  // rewind a clock that's live on stage. Call pushUndo() BEFORE mutating.
+  const UNDO_LIMIT = 12;
+  const undoStack = [];
+
+  // wholesale=true for New/Load Show, which also replace settings and keymap. Those
+  // are captured with a SHALLOW copy on purpose: the logo is a base64 string up to
+  // 3MB, and strings are immutable, so sharing the reference costs nothing where a
+  // deep copy would hold a fresh 3MB per snapshot. Ordinary edits don't capture
+  // settings at all — otherwise undoing a cue delete would silently revert unrelated
+  // colour or font changes made since.
+  function pushUndo(label, wholesale) {
+    const snap = {
+      label,
+      cues: JSON.parse(JSON.stringify(cues)),
+      presets: presets.slice(),
+      activeCue
+    };
+    if (wholesale) {
+      snap.settings = Object.assign({}, settings);
+      snap.keymap = Object.assign({}, keymap);
+      snap.plannedStart = plannedStart;
+      snap.hardOut = hardOut;
+    }
+    undoStack.push(snap);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    renderUndo();
+  }
+
+  function renderUndo() {
+    const btn = $('undoBtn');
+    const top = undoStack[undoStack.length - 1];
+    btn.disabled = !top;
+    btn.title = top ? 'Undo ' + top.label + '  (⌘Z)' : 'Nothing to undo';
+    setText('undoBtn', top ? 'Undo ' + top.label : 'Undo');
+  }
+
+  function undo() {
+    const snap = undoStack.pop();
+    if (!snap) return;
+    cues = snap.cues.map(normaliseCue);
+    presets = snap.presets.slice();
+    activeCue = snap.activeCue < cues.length ? snap.activeCue : -1;
+    if (snap.settings) { settings = Object.assign({}, snap.settings); saveSettings(); pushSettings(); }
+    if (snap.keymap) { keymap = Object.assign({}, snap.keymap); saveKeymap(); paintKeyHints(); }
+    // Only wholesale snapshots carry a plan; ordinary edits leave it alone.
+    if (snap.plannedStart !== undefined) {
+      plannedStart = snap.plannedStart;
+      hardOut = snap.hardOut;
+      saveSchedule();
+      syncSchedInputs();
+      paintSchedule();
+    }
+    // If the message currently on air came from a preset that no longer exists at
+    // that index, drop the association rather than leave it pointing at the wrong one.
+    if (typeof msgSource === 'number' && msgSource >= presets.length) {
+      message = ''; msgSource = null;
+    }
+    saveCues();
+    savePresets();
+    renderCues();
+    renderMsgs();
+    updateCustomBtn();
+    renderUndo();
+    broadcast();
+  }
+
+  // ---- Cue list ----
+  function saveCues() { localStorage.setItem('cues', JSON.stringify(cues)); pushCues(); }
+
+  let reorderMode = false;
+  let dragIndex = null;
+
+  function moveCue(from, to) {
+    if (from === to || from == null || to == null) return;
+    pushUndo('reorder');
+    const activeObj = activeCue >= 0 ? cues[activeCue] : null;
+    const [moved] = cues.splice(from, 1);
+    cues.splice(to, 0, moved);
+    activeCue = activeObj ? cues.indexOf(activeObj) : -1;
+    saveCues();
+    renderCues();
+    broadcast();
+  }
+
+  function renderCues() {
+    const list = $('cueList');
+    list.innerHTML = '';
+    if (!cues.length) {
+      list.innerHTML = '<div class="empty">No cues yet — add one below</div>';
+      paintSchedule();
+      return;
+    }
+    const nextIdx = activeCue >= 0 ? activeCue + 1 : 0;
+    cues.forEach((cue, i) => {
+      const row = document.createElement('div');
+      row.className = 'cue' + (i === activeCue ? ' active' : (i === nextIdx ? ' next' : ''));
+      const num = document.createElement('span');
+      num.className = 'idx';
+      num.textContent = (i + 1);
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = cue.name;
+      const dur = document.createElement('span');
+      dur.className = 'dur';
+      dur.textContent = cue.type === 'tod' ? 'TOD' : cue.type === 'countup' ? 'UP' : fmt(cue.seconds);
+      if (cue.schedStart) { dur.textContent += ' ⏰'; dur.title = 'Starts at ' + cue.schedStart; }
+      const eta = document.createElement('span');
+      eta.className = 'eta';
+      eta.dataset.idx = String(i);
+      row.append(num);
+      if (cue.color || cue.bg) {
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = cue.color || cue.bg;
+        row.append(dot);
+      }
+      row.append(name, eta, dur);
+
+      if (reorderMode && !showLock) {
+        const grip = document.createElement('span');
+        grip.className = 'grip';
+        grip.textContent = '⠿';
+        row.append(grip);
+        row.classList.add('draggable');
+        row.draggable = true;
+        row.addEventListener('dragstart', (e) => {
+          dragIndex = i;
+          row.classList.add('dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(i));
+        });
+        row.addEventListener('dragend', () => {
+          dragIndex = null;
+          row.classList.remove('dragging');
+          document.querySelectorAll('.cue.drag-over').forEach(r => r.classList.remove('drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (dragIndex !== null && dragIndex !== i) row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          row.classList.remove('drag-over');
+          moveCue(dragIndex, i);
+        });
+      } else {
+        const edit = document.createElement('button');
+        edit.className = 'edit';
+        edit.textContent = '✎';
+        edit.title = 'Edit cue';
+        edit.addEventListener('click', () => openCueEditor(i));
+        row.append(edit);
+        const load = document.createElement('button');
+        const isActive = i === activeCue;
+        load.className = isActive ? 'clear-on' : 'load';
+        load.textContent = isActive ? 'Clear' : 'Load';
+        load.addEventListener('click', () => {
+          if (isActive) {           // unload cue, back to manual time
+            running = false;
+            activeCue = -1;
+            todMode = false;
+            countUp = false;
+            // The cue is coming off air here just as surely as if the next one had
+            // been loaded — close its as-run entry, or the idle gap that follows
+            // gets counted into the next cue's actual duration.
+            closeCueRun();
+            setFromInputs();
+            renderCues();
+            broadcast();
+          } else {
+            loadCue(i, false);
+          }
+        });
+        const del = document.createElement('button');
+        del.className = 'del';
+        del.textContent = '✕';
+        del.title = 'Delete cue';
+        del.addEventListener('click', () => {
+          // Deleting the cue that's driving a live clock is worth a beat's pause.
+          // Every delete asks now, not just the running one — deleting the NEXT cue
+          // mid-show is just as disruptive and used to go through silently.
+          const live = i === activeCue && running;
+          ask(live ? 'Delete the running cue?' : 'Delete cue?',
+              '"' + cue.name + '"' + (live ? ' is on the display right now.' : ''),
+              'Delete', true).then(yes => {
+            if (!yes) return;
+            pushUndo('delete cue');
+            cues.splice(i, 1);
+            if (activeCue === i) {
+              activeCue = -1;
+              // Its mode went with it. Leaving these set stranded the output in
+              // time-of-day or count-up with no cue loaded and no obvious way back —
+              // the panel said "manual" while the presenter still saw a clock.
+              // The clock itself is left alone: deleting a row must never stop time.
+              todMode = false;
+              countUp = false;
+              closeCueRun();
+              syncInputsFromRemaining();   // panel and output must agree
+            } else if (activeCue > i) activeCue--;
+            if (armedCue != null && armedCue >= cues.length) armedCue = null;
+            saveCues();
+            renderCues();
+            broadcast(true);
+          });
+        });
+        row.append(load, del);
+      }
+      list.appendChild(row);
+    });
+    paintSchedule();   // rows were just rebuilt, so their ETAs are empty
+  }
+
+  $('reorderBtn').addEventListener('click', () => {
+    if (showLock) return;
+    reorderMode = !reorderMode;
+    $('reorderBtn').textContent = reorderMode ? 'Done' : 'Reorder';
+    $('reorderBtn').className = reorderMode ? 'small on' : 'small';
+    renderCues();
+  });
+
+  let addTod = false;   // TOD toggle for the add row
+
+  $('addTodBtn').addEventListener('click', () => {
+    addTod = !addTod;
+    $('addTodBtn').className = addTod ? 'send' : 'quick';
+    $('cueMin').disabled = addTod;
+    $('cueSec').disabled = addTod;
+  });
+
+  $('addCueBtn').addEventListener('click', () => {
+    let cue;
+    if (addTod) {
+      cue = normaliseCue({ name: $('cueNameIn').value.trim() || 'Time of day', type: 'tod' });
+    } else {
+      const name = $('cueNameIn').value.trim() || ('Cue ' + (cues.length + 1));
+      const m = parseInt($('cueMin').value, 10) || 0;
+      const s = parseInt($('cueSec').value, 10) || 0;
+      const seconds = m * 60 + s;
+      if (seconds <= 0) return;
+      cue = normaliseCue({ name, seconds });
+    }
+    pushUndo('add cue');
+    cues.push(cue);
+    $('cueNameIn').value = ''; $('cueMin').value = ''; $('cueSec').value = '';
+    saveCues();
+    renderCues();
+    renderStatus();
+  });
+  $('cueNameIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addCueBtn').click(); });
+
+  // ---- Transport ----
+  $('startBtn').addEventListener('click', () => {
+    running = !running;
+    lastTick = performance.now();
+    logRun(running ? 'start' : 'pause');
+    broadcast(true);
+  });
+
+  $('todBtn').addEventListener('click', () => {
+    todMode = !todMode;
+    if (todMode) running = false;
+    if (!todMode && activeCue >= 0 && cues[activeCue] && cues[activeCue].type === 'tod') {
+      activeCue = -1;
+      countUp = false;
+      renderCues();
+    }
+    broadcast();
+  });
+
+  $('resetBtn').addEventListener('click', () => {
+    running = false;
+    const cue = activeCue >= 0 ? cues[activeCue] : null;
+    if (cue && cue.type === 'timer') remaining = cue.seconds;
+    else if (cue && cue.type === 'countup') remaining = 0;
+    else if (!cue) setFromInputs();
+    logRun('reset');
+    broadcast(true);
+  });
+
+  // v2: GO — arm and start the next cue
+  $('goBtn').addEventListener('click', () => {
+    const idx = parseInt($('goBtn').dataset.idx, 10);
+    if (isNaN(idx)) return;
+    armedCue = null;
+    loadCue(idx, true);
+    // Opt-in: the first GO can close the rundown against accidental edits.
+    if (lockOnGo && !showLock) applyLock(true);
+  });
+
+  // v2: blank the display output
+  // Hold to blank. It used to be a plain click on a button visually identical to TOD
+  // and sitting right next to it — one slip blanked the programme output. Blanking now
+  // needs a deliberate 500ms press; releasing early cancels. Un-blanking is instant,
+  // because getting the picture back should never be gated.
+  const BLANK_HOLD = 500;
+  let blankTimer = null, blankRaf = null;
+
+  function blankLabel() {
+    setText('blackLabel', blackout ? 'Blanked — tap to restore' : 'Hold to blank');
+    $('blackBtn').className = blackout ? 'on' : '';
+  }
+  function cancelHold() {
+    clearTimeout(blankTimer); blankTimer = null;
+    cancelAnimationFrame(blankRaf);
+    $('blackFill').style.width = '0%';
+  }
+  function setBlackout(v) {
+    blackout = v;
+    logRun(v ? 'blackout-on' : 'blackout-off');
+    blankLabel();
+    broadcast(true);
+  }
+  $('blackBtn').addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (blackout) { setBlackout(false); return; }   // restoring is immediate
+    const t0 = performance.now();
+    const step = () => {
+      const pct = Math.min(100, (performance.now() - t0) / BLANK_HOLD * 100);
+      $('blackFill').style.width = pct + '%';
+      if (pct < 100) blankRaf = requestAnimationFrame(step);
+    };
+    blankRaf = requestAnimationFrame(step);
+    blankTimer = setTimeout(() => { cancelHold(); setBlackout(true); }, BLANK_HOLD);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
+    $('blackBtn').addEventListener(ev, cancelHold));
+
+  // v2: manual is an explicit mode, not a side effect of typing.
+  // Editing mm:ss no longer silently unloads the active cue — you have to ask for it.
+  function takeManual() {
+    running = false;
+    activeCue = -1;
+    todMode = false;
+    countUp = false;
+    setFromInputs();
+    renderCues();
+    broadcast();
+    $('min').focus();
+    $('min').select();
+  }
+
+  function applyManual() {
+    if (activeCue >= 0) return;   // a cue owns the clock; inputs are inert
+    setFromInputs();
+    broadcast();
+  }
+
+  $('manualBtn').addEventListener('click', takeManual);
+  $('setManualBtn').addEventListener('click', applyManual);
+  ['min', 'sec'].forEach(id => {
+    $(id).addEventListener('change', applyManual);
+    $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') applyManual(); });
+  });
+
+  // ---- Cue editor ----
+  let editingIndex = -1;
+  let ceColor = null;   // selected digit colour (null = default)
+  let ceBg = null;      // selected background tint (null = default)
+
+  function buildSwatches(containerId, palette, getSel, setSel) {
+    const box = $(containerId);
+    box.innerHTML = '';
+    const none = document.createElement('span');
+    none.className = 'swatch none' + (getSel() == null ? ' sel' : '');
+    none.title = 'Default';
+    none.addEventListener('click', () => { setSel(null); buildSwatches(containerId, palette, getSel, setSel); });
+    box.appendChild(none);
+    palette.forEach(col => {
+      const sw = document.createElement('span');
+      sw.className = 'swatch' + (getSel() === col ? ' sel' : '');
+      sw.style.background = col;
+      sw.addEventListener('click', () => { setSel(col); buildSwatches(containerId, palette, getSel, setSel); });
+      box.appendChild(sw);
+    });
+  }
+
+  function openCueEditor(i) {
+    editingIndex = i;
+    const cue = cues[i];
+    $('ceName').value = cue.name;
+    $('ceType').value = cue.type;
+    $('ceMin').value = Math.floor(cue.seconds / 60);
+    $('ceSec').value = cue.seconds % 60;
+    $('ceMin').disabled = $('ceSec').disabled = cue.type !== 'timer';
+    $('ceSub').value = cue.subtitle;
+    $('ceShowName').checked = cue.showName;
+    ceColor = cue.color;
+    ceBg = cue.bg;
+    buildSwatches('ceColors', DIGIT_COLORS, () => ceColor, v => ceColor = v);
+    buildSwatches('ceBgs', BG_TINTS, () => ceBg, v => ceBg = v);
+    $('ceWarnAt').value = cue.warnAt != null ? cue.warnAt : '';
+    $('ceOvertime').value = cue.overtime;
+    $('ceFollow').checked = cue.autoFollow;
+    $('ceSched').value = cue.schedStart || '';
+    $('ceAutoMsg').value = cue.autoMsgText;
+    $('ceAutoMsgAt').value = cue.autoMsgAt;
+    $('ceNotesIn').value = cue.notes;
+    $('cueModal').classList.add('open');
+  }
+
+  function readCueEditor() {
+    const m = parseInt($('ceMin').value, 10) || 0;
+    const s = parseInt($('ceSec').value, 10) || 0;
+    const warnRaw = $('ceWarnAt').value.trim();
+    return normaliseCue({
+      name: $('ceName').value.trim() || 'Cue',
+      type: $('ceType').value,
+      seconds: Math.max(0, m * 60 + s),
+      color: ceColor,
+      bg: ceBg,
+      showName: $('ceShowName').checked,
+      subtitle: $('ceSub').value.trim(),
+      warnAt: warnRaw === '' ? null : Math.max(0, parseInt(warnRaw, 10) || 0),
+      overtime: $('ceOvertime').value,
+      autoFollow: $('ceFollow').checked,
+      schedStart: $('ceSched').value || null,
+      autoMsgText: $('ceAutoMsg').value.trim(),
+      autoMsgAt: Math.max(1, parseInt($('ceAutoMsgAt').value, 10) || 120),
+      notes: $('ceNotesIn').value.trim()
+    });
+  }
+
+  function closeCueEditor() {
+    $('cueModal').classList.remove('open');
+    editingIndex = -1;
+  }
+
+  $('ceType').addEventListener('change', () => {
+    const t = $('ceType').value;
+    $('ceMin').disabled = $('ceSec').disabled = t !== 'timer';
+  });
+  $('ceSchedClear').addEventListener('click', () => { $('ceSched').value = ''; });
+
+  $('ceSaveBtn').addEventListener('click', () => {
+    if (editingIndex < 0) return;
+    const updated = readCueEditor();
+    if (updated.type === 'timer' && updated.seconds <= 0) { say('Cue needs a duration', 'Countdown cues need a duration above zero.'); return; }
+    pushUndo('cue edit');
+    cues[editingIndex] = updated;
+    saveCues();
+    const wasActive = editingIndex === activeCue;
+    closeCueEditor();
+    if (wasActive) loadCue(activeCue, false);
+    else { renderCues(); broadcast(); }
+  });
+
+  $('ceDupBtn').addEventListener('click', () => {
+    if (editingIndex < 0) return;
+    const copy = readCueEditor();
+    copy.name += ' copy';
+    pushUndo('duplicate cue');
+    cues.splice(editingIndex + 1, 0, copy);
+    if (activeCue > editingIndex) activeCue++;
+    saveCues();
+    closeCueEditor();
+    renderCues();
+    broadcast();
+  });
+
+  $('ceCancelBtn').addEventListener('click', closeCueEditor);
+  $('cueModal').addEventListener('click', (e) => {
+    if (e.target === $('cueModal')) closeCueEditor();
+  });
+
+  document.querySelectorAll('.quick[data-add]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      remaining += parseInt(btn.dataset.add, 10);
+      broadcast();
+    });
+  });
+
+  // ---- Speed ----
+  function paintSpeed() {
+    const off = Math.abs(speed - 1) > 0.001;
+    document.body.classList.toggle('speedy', off);
+    const txt = speed.toFixed(2) + '×';
+    setText('speedFlag', txt);
+    setText('speedVal', txt);
+    setText('speedVeilVal', txt);
+  }
+
+  // Arming the clock-speed slider. Disabled and veiled by default so it can't be
+  // dragged in passing; auto-disarms after 8s of no input so it never sits open.
+  const SPEED_ARM_MS = 8000;
+  let speedArmTimer = null;
+  function armSpeed(on) {
+    $('speedRow').classList.toggle('armed', on);
+    $('speed').disabled = !on;
+    clearTimeout(speedArmTimer);
+    if (on) speedArmTimer = setTimeout(() => armSpeed(false), SPEED_ARM_MS);
+  }
+  $('speedVeil').addEventListener('click', () => { armSpeed(true); $('speed').focus(); });
+  $('speed').addEventListener('input', () => {
+    speed = parseFloat($('speed').value);
+    paintSpeed();
+    renderStatus();
+    armSpeed(true);          // keep it open while actively adjusting
+  });
+  $('speedReset').addEventListener('click', () => {
+    speed = 1;
+    $('speed').value = 1;
+    paintSpeed();
+    renderStatus();
+    armSpeed(false);         // back to 1.00x, nothing left to adjust
+  });
+
+  // ---- Messages ----
+  // Preset chips fire straight to air; the big Clear button always kills whatever's up.
+  let msgSource = null; // 'custom' | 'auto' | preset index | null
+
+  const defaultPresets = ['WRAP UP', '5 MINUTES LEFT', 'TIME IS UP'];
+  let presets = JSON.parse(localStorage.getItem('presetMsgs') || 'null') || defaultPresets;
+  presets = presets.filter(p => p && p.trim());
+
+  function savePresets() { localStorage.setItem('presetMsgs', JSON.stringify(presets)); pushCues(); }
+
+  function updateCustomBtn() {
+    const custom = $('sendMsgBtn');
+    const customActive = msgSource === 'custom' && message;
+    custom.textContent = customActive ? 'Clear' : 'Send';
+    custom.className = customActive ? 'clear-on' : 'send';
+
+    const clearAll = $('clearAllBtn');
+    clearAll.className = message ? 'armed' : '';
+    clearAll.textContent = message ? 'Clear message' : 'Nothing on screen';
+
+    const onAir = $('onAir');
+    onAir.className = message ? 'onair show' : 'onair';
+    onAir.textContent = message ? 'ON SCREEN: ' + message : '';
+  }
+
+  function renderMsgs() {
+    const list = $('msgList');
+    list.innerHTML = '';
+    if (!presets.length) {
+      list.innerHTML = '<div class="empty">No preset messages — add one below</div>';
+      return;
+    }
+    presets.forEach((text, i) => {
+      const active = msgSource === i && message;
+      const chip = document.createElement('button');
+      chip.className = 'chip' + (active ? ' on' : '');
+      chip.title = active ? 'Click to clear' : 'Click to send to display';
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = text;
+      chip.appendChild(txt);
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '✕';
+      x.title = 'Delete preset';
+      x.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndo('delete preset');
+        presets.splice(i, 1);
+        if (msgSource === i) { message = ''; msgSource = null; }
+        else if (typeof msgSource === 'number' && msgSource > i) msgSource--;
+        savePresets();
+        renderMsgs();
+        updateCustomBtn();
+        broadcast();
+      });
+      chip.appendChild(x);
+      chip.addEventListener('click', () => setMessage(text, i));
+      list.appendChild(chip);
+    });
+  }
+
+  function setMessage(text, source) {
+    if (msgSource === source && message) {  // toggle off
+      message = ''; msgSource = null;
+    } else {
+      message = text; msgSource = text ? source : null;
+    }
+    renderMsgs();
+    updateCustomBtn();
+    logRun(message ? 'message-on' : 'message-off', { detail: message || '' });
+    broadcast(true);
+  }
+
+  $('sendMsgBtn').addEventListener('click', () => setMessage($('msg').value.trim(), 'custom'));
+  $('msg').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('sendMsgBtn').click(); });
+
+  $('clearAllBtn').addEventListener('click', () => {
+    message = ''; msgSource = null;
+    renderMsgs();
+    updateCustomBtn();
+    broadcast();
+  });
+
+  $('addMsgBtn').addEventListener('click', () => {
+    const text = $('msgNameIn').value.trim();
+    if (!text) return;
+    pushUndo('add preset');
+    presets.push(text);
+    $('msgNameIn').value = '';
+    savePresets();
+    renderMsgs();
+  });
+  $('msgNameIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addMsgBtn').click(); });
+
+  renderMsgs();
+  updateCustomBtn();
+
+  // ---- Display output ----
+  async function refreshDisplays() {
+    const displays = await window.timerAPI.getDisplays();
+    const sel = $('displaySel');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    displays.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.label;
+      sel.appendChild(opt);
+    });
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    updateOutStatus();
+  }
+  // A confidence light that lies is worse than none. This used to be
+  // `blackout ? '' : 'live'`, so it glowed green with every display window closed.
+  // It now reports the actual windows, and blackout only downgrades a real output.
+  let outOpen = { presenter: false, clock: false };
+  function updateOutStatus() {
+    const names = ['presenter', 'clock'].filter(v => outOpen[v]);
+    const any = names.length > 0;
+    setText('outLabel', !any ? 'no output' : names.join(' + ') + (blackout ? ' · blanked' : ''));
+    $('outDot').className = 'outdot' + (any && !blackout ? ' live' : any ? ' warn' : '');
+  }
+  async function pollOutputs() {
+    outOpen = await window.timerAPI.displayWindows();
+    updateOutStatus();
+  }
+  $('displaySel').addEventListener('mousedown', refreshDisplays);
+  $('displaySel').addEventListener('change', updateOutStatus);
+  const curView = () => $('viewSel').value;
+  $('fsBtn').addEventListener('click', () => {
+    const id = parseInt($('displaySel').value, 10);
+    if (!isNaN(id)) window.timerAPI.fullscreenOnDisplay(curView(), id);
+    setTimeout(refreshViewState, 400);
+  });
+  $('exitFsBtn').addEventListener('click', () => window.timerAPI.exitFullscreen(curView()));
+  $('reopenBtn').addEventListener('click', () => {
+    window.timerAPI.reopenDisplay(curView());
+    setTimeout(() => { broadcast(true); refreshViewState(); }, 500);
+  });
+  $('closeDispBtn').addEventListener('click', () => {
+    window.timerAPI.closeDisplay(curView());
+    setTimeout(refreshViewState, 300);
+  });
+  $('viewSel').addEventListener('change', refreshViewState);
+
+  async function refreshViewState() {
+    outOpen = await window.timerAPI.displayWindows();
+    updateOutStatus();
+    const v = curView();
+    setText('viewState', (outOpen[v] ? v + ' is open' : v + ' is closed')
+      + ' — ' + ['presenter','clock'].filter(k => outOpen[k]).length + ' of 2 outputs up');
+  }
+
+  // ---- Show schedule popover ----
+  function fmtDur(secs) {
+    const a = Math.max(0, Math.round(secs));
+    const h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60);
+    return (h ? h + 'h ' : '') + m + 'm';
+  }
+
+  // Spells out where the drift figure comes from, so the numbers aren't a black box.
+  function renderSchedSummary() {
+    const total = cues.reduce((a, c) => a + cueDuration(c), 0);
+    const timed = cues.filter(c => !cueIsIndeterminate(c)).length;
+    const s = computeSchedule();
+    const bits = [];
+    bits.push('<b>' + timed + '</b> timed cue' + (timed === 1 ? '' : 's') +
+      ' totalling <b>' + fmtDur(total) + '</b>');
+    if (s.plannedEnd) bits.push('planned finish <b>' + fmtTod(s.plannedEnd) + '</b>');
+    else bits.push('set a start to get a planned finish and drift');
+    if (cues.length - timed > 0) {
+      bits.push('<b>' + (cues.length - timed) + '</b> count-up/time-of-day cue' +
+        (cues.length - timed === 1 ? '' : 's') + ' can\'t be timed, so the end is an estimate');
+    }
+    $('schedSummary').innerHTML = bits.join(' · ');
+  }
+
+  function readSchedInputs() {
+    plannedStart = $('schedStart').value || '';
+    hardOut = $('schedHardOut').value || '';
+    saveSchedule();
+    paintSchedule();
+    renderSchedSummary();
+  }
+
+  // Push the current plan back into the fields. Called on load/new show, where the
+  // plan changes underneath a popover the operator may already have open.
+  function syncSchedInputs() {
+    $('schedStart').value = plannedStart;
+    $('schedHardOut').value = hardOut;
+    if (schedPopOpen()) renderSchedSummary();
+  }
+
+  function schedPopOpen() { return $('schedPop').classList.contains('open'); }
+  function openSchedPop() {
+    $('schedStart').value = plannedStart;
+    $('schedHardOut').value = hardOut;
+    renderSchedSummary();
+    $('schedPop').classList.add('open');
+    $('schedEditBtn').className = 'small on';
+    $('schedStart').focus();
+  }
+  function closeSchedPop() {
+    $('schedPop').classList.remove('open');
+    $('schedEditBtn').className = 'small';
+  }
+  function toggleSchedPop() { schedPopOpen() ? closeSchedPop() : openSchedPop(); }
+
+  $('schedStart').value = plannedStart;
+  $('schedHardOut').value = hardOut;
+  $('schedBar').addEventListener('click', toggleSchedPop);
+  $('schedEditBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleSchedPop(); });
+  $('schedDone').addEventListener('click', closeSchedPop);
+  $('schedStart').addEventListener('change', readSchedInputs);
+  $('schedHardOut').addEventListener('change', readSchedInputs);
+  $('schedClear').addEventListener('click', () => {
+    $('schedStart').value = ''; $('schedHardOut').value = '';
+    readSchedInputs();
+  });
+  document.addEventListener('mousedown', (e) => {
+    if ($('speedRow').classList.contains('armed') && !$('speedRow').contains(e.target)) armSpeed(false);
+  });
+
+  // Click anywhere outside to dismiss
+  document.addEventListener('mousedown', (e) => {
+    if (!schedPopOpen()) return;
+    if (!$('schedPop').contains(e.target) && !$('schedBar').contains(e.target)
+        && e.target !== $('schedEditBtn')) closeSchedPop();
+  });
+
+  // ---- CSV rundown import ----
+  // Proper field-level parser rather than split(','): rundowns come out of Excel and
+  // Google Sheets, so quoted fields with embedded commas ("Smith, John") and quoted
+  // newlines inside notes are entirely normal. Also strips a UTF-8 BOM, which Excel
+  // on Windows adds and which would otherwise corrupt the first header name.
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], field = '', quoted = false;
+    text = text.replace(/^﻿/, '');
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }   // escaped quote
+          else quoted = false;
+        } else field += ch;
+      } else if (ch === '"') {
+        quoted = true;
+      } else if (ch === ',') {
+        row.push(field); field = '';
+      } else if (ch === '\r') {
+        // swallow; the \n handles the break
+      } else if (ch === '\n') {
+        row.push(field); field = '';
+        rows.push(row); row = [];
+      } else field += ch;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(r => r.some(c => c.trim() !== ''));   // drop blank lines
+  }
+
+  const CSV_HEADERS = ['name','duration','type','speaker','show_name','warn_at','overtime',
+    'auto_follow','scheduled_start','auto_message','auto_message_at','notes'];
+
+  function csvTemplate() {
+    const rows = [
+      CSV_HEADERS.join(','),
+      '"Doors open",15:00,timer,,no,60,countup,no,,,,"Walk-in music"',
+      '"Welcome",5:00,timer,"Ben Jackson",yes,60,countup,yes,,,,',
+      '"Keynote",30:00,timer,"Dr Amara Osei",yes,300,countup,no,,"WRAP UP",120,"Radio mic 2"',
+      '"Q&A",900,timer,,yes,,stop,no,,,,"Bare number = seconds"',
+      '"Break",15:00,timer,,no,,countup,no,14:30,,,"scheduled_start fires at a time of day"',
+      '"Open discussion",0,countup,,yes,,,no,,,,"Counts up, no fixed duration"'
+    ];
+    return rows.join('\r\n') + '\r\n';
+  }
+
+  function parseBool(v) {
+    return ['yes','y','true','1','t'].includes(String(v || '').trim().toLowerCase());
+  }
+
+  // "mm:ss" / "h:mm:ss" / bare seconds -> seconds. Returns null if unparseable.
+  function parseDuration(v) {
+    const s = String(v || '').trim();
+    if (!s) return null;
+    if (/^\d+$/.test(s)) return parseInt(s, 10);
+    const parts = s.split(':');
+    if (parts.length > 3 || parts.some(p => !/^\d+$/.test(p.trim()))) return null;
+    return parts.reduce((acc, p) => acc * 60 + parseInt(p.trim(), 10), 0);
+  }
+
+  let csvStaged = null;   // cues parsed and waiting for Append/Replace
+
+  function buildImport(text) {
+    const rows = parseCsv(text);
+    if (!rows.length) return { cues: [], errors: [{ line: 0, msg: 'File is empty' }], unknown: [] };
+
+    const header = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+    const idx = {};
+    CSV_HEADERS.forEach(h => { idx[h] = header.indexOf(h); });
+    const unknown = header.filter(h => h && !CSV_HEADERS.includes(h));
+
+    if (idx.name < 0) {
+      return { cues: [], errors: [{ line: 1, msg: 'No "name" column found in the header row' }], unknown };
+    }
+
+    const get = (r, key) => idx[key] >= 0 ? (r[idx[key]] || '').trim() : '';
+    const cues = [], errors = [];
+
+    rows.slice(1).forEach((r, n) => {
+      const line = n + 2;                       // 1-based, plus the header
+      const name = get(r, 'name');
+      if (!name) { errors.push({ line, msg: 'Missing name' }); return; }
+
+      let type = (get(r, 'type') || 'timer').toLowerCase();
+      if (type === 'countdown') type = 'timer';
+      if (type === 'time of day' || type === 'time-of-day' || type === 'clock') type = 'tod';
+      if (!['timer','countup','tod'].includes(type)) {
+        errors.push({ line, msg: '"' + name + '": unknown type "' + type + '"' }); return;
+      }
+
+      let seconds = 0;
+      if (type === 'timer') {
+        seconds = parseDuration(get(r, 'duration'));
+        if (seconds === null) { errors.push({ line, msg: '"' + name + '": duration missing or unreadable' }); return; }
+        if (seconds <= 0) { errors.push({ line, msg: '"' + name + '": countdown needs a duration above zero' }); return; }
+      }
+
+      const sched = get(r, 'scheduled_start');
+      if (sched && !/^\d{1,2}:\d{2}$/.test(sched)) {
+        errors.push({ line, msg: '"' + name + '": scheduled_start must be HH:MM' }); return;
+      }
+
+      const warnRaw = get(r, 'warn_at');
+      const overtime = (get(r, 'overtime') || 'countup').toLowerCase();
+
+      cues.push(normaliseCue({
+        name,
+        type,
+        seconds,
+        subtitle: get(r, 'speaker'),
+        showName: parseBool(get(r, 'show_name')),
+        warnAt: warnRaw === '' ? null : Math.max(0, parseInt(warnRaw, 10) || 0),
+        overtime: overtime === 'stop' ? 'stop' : 'countup',
+        autoFollow: parseBool(get(r, 'auto_follow')),
+        schedStart: sched || null,
+        autoMsgText: get(r, 'auto_message'),
+        autoMsgAt: Math.max(1, parseInt(get(r, 'auto_message_at'), 10) || 120),
+        notes: get(r, 'notes')
+      }));
+    });
+
+    return { cues, errors, unknown };
+  }
+
+  function renderImportResult(res) {
+    csvStaged = res.cues.length ? res.cues : null;
+    $('csvResult').style.display = 'block';
+    $('csvAppendBtn').disabled = !csvStaged;
+    $('csvReplaceBtn').disabled = !csvStaged;
+
+    const bits = [];
+    bits.push('<b>' + res.cues.length + '</b> cue' + (res.cues.length === 1 ? '' : 's') + ' ready');
+    if (res.errors.length) bits.push('<b>' + res.errors.length + '</b> row' + (res.errors.length === 1 ? '' : 's') + ' skipped');
+    if (res.unknown.length) bits.push('ignored unknown column' + (res.unknown.length === 1 ? '' : 's') + ': ' + res.unknown.join(', '));
+    const total = res.cues.reduce((a, c) => a + cueDuration(c), 0);
+    if (total) bits.push('total running time <b>' + fmtDur(total) + '</b>');
+    $('csvSummary').innerHTML = bits.join(' · ');
+
+    const box = $('csvPreview');
+    box.innerHTML = '';
+    res.errors.forEach(e => {
+      const d = document.createElement('div');
+      d.className = 'csvrow bad';
+      d.innerHTML = '<span class="n">' + (e.line || '-') + '</span><span class="err"></span>';
+      d.querySelector('.err').textContent = e.msg;
+      box.appendChild(d);
+    });
+    res.cues.forEach((c, i) => {
+      const d = document.createElement('div');
+      d.className = 'csvrow';
+      d.innerHTML = '<span class="n"></span><span class="nm"></span><span class="dt"></span>';
+      d.querySelector('.n').textContent = i + 1;
+      d.querySelector('.nm').textContent = c.name + (c.subtitle ? ' — ' + c.subtitle : '');
+      d.querySelector('.dt').textContent =
+        c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      box.appendChild(d);
+    });
+  }
+
+  function openImport() {
+    csvStaged = null;
+    $('csvResult').style.display = 'none';
+    $('csvAppendBtn').disabled = true;
+    $('csvReplaceBtn').disabled = true;
+    $('importModal').classList.add('open');
+  }
+  function closeImport() {
+    $('importModal').classList.remove('open');
+    csvStaged = null;
+  }
+
+  $('importBtn').addEventListener('click', () => {
+    if (showLock) { say('Rundown locked', 'Unlock from the top bar to import a rundown.'); return; }
+    openImport();
+  });
+  $('importCancelBtn').addEventListener('click', closeImport);
+  $('importModal').addEventListener('click', (e) => { if (e.target === $('importModal')) closeImport(); });
+
+  $('csvTemplateBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.saveTextFile({
+      title: 'Save CSV template',
+      defaultPath: 'stagecredit-rundown-template.csv',
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+      content: csvTemplate()
+    });
+    if (res && res.error) say('Could not save the template', res.error);
+  });
+
+  $('csvChooseBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.openTextFile({
+      title: 'Choose a rundown CSV',
+      filters: [{ name: 'CSV', extensions: ['csv', 'txt'] }]
+    });
+    if (!res || !res.ok) {
+      if (res && res.error) say('Could not read that file', res.error);
+      return;
+    }
+    renderImportResult(buildImport(res.content));
+  });
+
+  function applyImport(replace) {
+    if (!csvStaged) return;
+    pushUndo(replace ? 'replace cue list' : 'import cues');
+    if (replace) {
+      cues = csvStaged.slice();
+      activeCue = -1;                 // the cue that was loaded may no longer exist
+    } else {
+      cues = cues.concat(csvStaged);
+    }
+    saveCues();
+    closeImport();
+    renderCues();
+    broadcast();
+  }
+  $('csvAppendBtn').addEventListener('click', () => applyImport(false));
+  $('csvReplaceBtn').addEventListener('click', () => applyImport(true));
+
+  // ---- In-page dialogs ----
+  // Native confirm()/alert() block the JS thread, which stalls broadcast() — the
+  // presenter's display sits on a stale number until the operator dismisses the box.
+  // These are promise-based and let the clock keep ticking underneath.
+  let askResolve = null;
+  function ask(title, body, okLabel, danger) {
+    $('askTitle').textContent = title;
+    $('askBody').textContent = body;
+    $('askOk').textContent = okLabel || 'OK';
+    $('askOk').className = danger ? 'clear-on' : 'send';
+    $('askCancel').style.display = '';
+    $('askModal').classList.add('open');
+    return new Promise(res => { askResolve = res; });
+  }
+  function say(title, body) {
+    $('askTitle').textContent = title;
+    $('askBody').textContent = body;
+    $('askOk').textContent = 'Close';
+    $('askOk').className = 'send';
+    $('askCancel').style.display = 'none';
+    $('askModal').classList.add('open');
+    return new Promise(res => { askResolve = res; });
+  }
+  function closeAsk(v) {
+    $('askModal').classList.remove('open');
+    const r = askResolve; askResolve = null;
+    if (r) r(v);
+  }
+  $('askOk').addEventListener('click', () => closeAsk(true));
+  $('askCancel').addEventListener('click', () => closeAsk(false));
+  $('askModal').addEventListener('click', (e) => { if (e.target === $('askModal')) closeAsk(false); });
+
+  // ---- Show lock ----
+  // Deliberately NOT persisted: every session starts unlocked. Locking is a
+  // during-the-show act, and inheriting it from last night would be a surprise.
+  let showLock = false;
+  let lockOnGo = localStorage.getItem('lockOnGo') === '1';
+
+  function applyLock(on) {
+    showLock = on;
+    document.body.classList.toggle('locked', on);
+    $('lockBtn').textContent = on ? 'Locked' : 'Unlocked';
+    $('lockBtn').className = 'small lockbtn' + (on ? ' locked' : '');
+    $('lockBtn').title = on
+      ? 'Rundown is read-only — click to unlock for editing'
+      : 'Rundown is editable — click to lock it for the show';
+    $('reorderBtn').disabled = on;
+    renderCues();
+    renderMsgs();
+  }
+  $('lockBtn').addEventListener('click', () => applyLock(!showLock));
+
+  // ---- Cue mirror for the LAN ----
+  // The remote needs the cue list and presets, which live in this renderer's
+  // localStorage. Pushed on change rather than with every state tick.
+  function pushCues() {
+    window.timerAPI.sendCues({
+      cues: cues.map(c => ({ name: c.name, type: c.type, seconds: c.seconds })),
+      presets: presets.slice()
+    });
+  }
+
+  // ---- As-run log ----
+  // Recorded in the main process so it survives a crash. Only meaningful transitions
+  // are logged — not every frame.
+  function logRun(event, extra) {
+    window.timerAPI.logEvent(Object.assign({
+      event,
+      cue: activeCue >= 0 ? activeCue + 1 : null,
+      cueName: activeCue >= 0 ? cues[activeCue].name : '',
+      remaining: Math.round(remaining)
+    }, extra || {}));
+  }
+
+  function asRunCsv(rows) {
+    const cols = ['at','event','cue','cueName','remaining','planned','actual','overrun','detail'];
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    return [cols.join(',')].concat(
+      rows.map(r => cols.map(c => esc(r[c])).join(','))
+    ).join('\r\n') + '\r\n';
+  }
+
+  $('asRunBtn').addEventListener('click', async () => {
+    const rows = await window.timerAPI.asRunRead();
+    if (!rows.length) { say('Nothing to export', 'The as-run log is empty.'); return; }
+    const res = await window.timerAPI.saveTextFile({
+      title: 'Export as-run log',
+      defaultPath: 'as-run-' + new Date().toISOString().slice(0, 10) + '.csv',
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+      content: asRunCsv(rows)
+    });
+    if (res && res.ok && await ask('Exported', rows.length +
+        ' entries written. Clear the log ready for the next show?', 'Clear log', true)) {
+      await window.timerAPI.asRunClear();
+    }
+  });
+
+  // ---- LAN server ----
+  let netInfo = null;
+
+  function renderNet() {
+    const on = netInfo && netInfo.running;
+    setText('netState', on ? 'on · ' + (netInfo.clients || 0) + ' client(s)' : 'off');
+    $('netBtn').textContent = on ? 'Stop server' : 'Start server';
+    $('netBtn').className = on ? 'small on' : 'small';
+    $('netPort').disabled = !!on;
+    const box = $('netLinks');
+    if (!on) { box.innerHTML = ''; return; }
+    const host = (netInfo.addresses && netInfo.addresses[0]) || 'localhost';
+    const base = 'http://' + host + ':' + netInfo.port;
+    const bits = [];
+    bits.push('<b>Display</b> <span class="u">' + base + '/display</span>');
+    bits.push('<b>Clock only</b> <span class="u">' + base + '/clock</span>');
+    bits.push('<b>Remote</b> <span class="u">' + base + '/remote?t=' + netInfo.token + '</span>');
+    bits.push('<b>Companion</b> <span class="u">' + base + '/api/action?a=toggle&amp;t=' + netInfo.token + '</span>');
+    if (!netInfo.live) bits.push('<span class="warn">ws module missing — pages will not update live. Run npm i ws.</span>');
+    if (netInfo.addresses && netInfo.addresses.length > 1) {
+      bits.push('<span style="color:#6f6e80">Other addresses: ' + netInfo.addresses.slice(1).join(', ') + '</span>');
+    }
+    box.innerHTML = bits.join('<br>');
+    // Click a link to copy it — far easier than reading an IP off a screen and
+    // typing it into a phone.
+    box.querySelectorAll('.u').forEach(el => el.addEventListener('click', () => {
+      navigator.clipboard.writeText(el.textContent).then(() => {
+        const old = el.textContent;
+        el.textContent = 'copied';
+        setTimeout(() => { el.textContent = old; }, 900);
+      }).catch(() => {});
+    }));
+  }
+
+  $('netBtn').addEventListener('click', async () => {
+    if (netInfo && netInfo.running) {
+      await window.timerAPI.serverStop();
+      netInfo = { running: false };
+      renderNet();
+      return;
+    }
+    const port = parseInt($('netPort').value, 10) || 8080;
+    const res = await window.timerAPI.serverStart({ port });
+    if (!res.ok) { say('Could not start the server', res.error); return; }
+    netInfo = Object.assign({ running: true, clients: 0 }, res);
+    renderNet();
+    pushSettings();
+    pushCues();
+    broadcast(true);
+  });
+
+  // ---- Remote commands ----
+  // Everything arrives here from the LAN and is performed through the same paths the
+  // buttons use, so there is exactly one implementation of each action.
+  window.timerAPI.onRemoteAction(({ action, value }) => {
+    const n = parseInt(value, 10);
+    switch (action) {
+      case 'toggle': $('startBtn').click(); break;
+      case 'start': if (!running) $('startBtn').click(); break;
+      case 'pause': if (running) $('startBtn').click(); break;
+      case 'reset': $('resetBtn').click(); break;
+      case 'tod': $('todBtn').click(); break;
+      // Straight to setBlackout, NOT through the button: blanking is a press-and-hold
+      // gesture locally (guarding against a slip on the desk), and that button has no
+      // click handler to fire. A remote command is already deliberate, so it acts at once.
+      case 'blank': setBlackout(!blackout); break;
+      case 'blankon': if (!blackout) setBlackout(true); break;
+      case 'blankoff': if (blackout) setBlackout(false); break;
+      case 'go':
+      case 'next': {
+        const t = activeCue >= 0 ? activeCue + 1 : 0;
+        if (cues[t]) loadCue(t, action === 'go');
+        break;
+      }
+      case 'prev': {
+        const t = activeCue > 0 ? activeCue - 1 : -1;
+        if (t >= 0) loadCue(t, false);
+        break;
+      }
+      // 1-based, matching the numbers printed down the cue list, the digit keys and
+      // every label in the app. The remote page sends 1-based too. It used to be a
+      // raw array index, so a Companion button written against the visible cue
+      // numbers loaded the cue after the one you meant.
+      case 'cue': if (!isNaN(n) && cues[n - 1]) loadCue(n - 1, false); break;
+      case 'add': if (!isNaN(n)) { remaining += n; broadcast(true); } break;
+      case 'set': if (!isNaN(n) && activeCue < 0) { remaining = Math.max(0, n); broadcast(true); } break;
+      // 1-based for the same reason as 'cue' — one counting convention across the API
+      case 'preset': if (!isNaN(n) && presets[n - 1]) setMessage(presets[n - 1], n - 1); break;
+      case 'message': setMessage(String(value || ''), 'custom'); break;
+      case 'clearmessage':
+        message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); broadcast(true);
+        break;
+    }
+  });
+
+  // ---- Top bar menu ----
+  function closeMenu() { $('showMenu').classList.remove('open'); }
+  $('showMenuBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('showMenu').classList.toggle('open');
+    $('modeBtn').className = 'mi' + (simpleMode ? ' on' : '');
+    $('modeBtn').textContent = simpleMode ? 'Simple mode ✓' : 'Simple mode';
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!$('showMenu').classList.contains('open')) return;
+    if (!$('showMenu').contains(e.target) && e.target !== $('showMenuBtn')) closeMenu();
+  });
+  $('showMenu').addEventListener('click', () => setTimeout(closeMenu, 0));
+
+  // ---- Settings inspector ----
+  function openSettings(tab) {
+    populateSettingsForm();
+    renderKeys();
+    refreshDisplays();
+    refreshViewState();
+    renderNet();
+    $('setLockOnGo').checked = lockOnGo;
+    if (tab) selectTab(tab);
+    $('settingsModal').classList.add('open');
+  }
+  function selectTab(name) {
+    document.querySelectorAll('.tab').forEach(t =>
+      t.className = 'tab' + (t.dataset.tab === name ? ' on' : ''));
+    document.querySelectorAll('.tabpane').forEach(p =>
+      p.className = 'tabpane' + (p.id === 'tab-' + name ? ' on' : ''));
+  }
+  document.querySelectorAll('.tab').forEach(t =>
+    t.addEventListener('click', () => selectTab(t.dataset.tab)));
+  $('settingsBtn').addEventListener('click', () => openSettings());
+  $('settingsDone').addEventListener('click', () => $('settingsModal').classList.remove('open'));
+  $('settingsModal').addEventListener('click', (e) => {
+    if (e.target === $('settingsModal')) $('settingsModal').classList.remove('open');
+  });
+  $('outStatus').addEventListener('click', () => openSettings('output'));
+  $('schedFromSettings').addEventListener('click', () => {
+    $('settingsModal').classList.remove('open');
+    openSchedPop();
+  });
+  $('setLockOnGo').addEventListener('change', () => {
+    lockOnGo = $('setLockOnGo').checked;
+    localStorage.setItem('lockOnGo', lockOnGo ? '1' : '0');
+  });
+
+  // ---- Simple mode ----
+  // Hides cues, messages, backtiming and clock speed. Nothing is deleted: cues and
+  // presets stay in storage, so switching back brings everything with it.
+  // (simpleMode itself is declared with the other state at the top of the script,
+  // because paintSchedule and the scheduled-start interval both read it.)
+  function applySimple(on, initial) {
+    simpleMode = on;
+    localStorage.setItem('simpleMode', on ? '1' : '0');
+    document.body.classList.toggle('simple', on);
+    $('modeBtn').textContent = on ? 'Simple mode ✓' : 'Simple mode';
+    $('modeBtn').title = on
+      ? 'Currently simple — click for cues, messages and backtiming'
+      : 'Strip back to just a timer and a display';
+
+    if (on && !initial) {
+      // Detach any loaded cue WITHOUT touching the clock: same remaining, same
+      // running state. The cue list is about to be hidden, so leaving it in charge
+      // would mean a name on the display and no way to reach it — but stopping a
+      // live clock to tidy up would be far worse.
+      if (activeCue >= 0) {
+        activeCue = -1;
+        todMode = false;
+        countUp = false;
+        closeCueRun();
+        syncInputsFromRemaining();
+      }
+      // A message you can't see the controls for is a message you can't clear.
+      if (message) { message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); }
+      armedCue = null;
+      if (showLock) applyLock(false);   // nothing left to protect
+      // "No speed" has to mean 1.00x, not a hidden multiplier still in effect.
+      if (speed !== 1) { speed = 1; $('speed').value = 1; paintSpeed(); }
+      armSpeed(false);
+      closeSchedPop();
+    }
+    if (!initial) { renderCues(); broadcast(); }
+  }
+
+  $('modeBtn').addEventListener('click', () => applySimple(!simpleMode));
+  applySimple(simpleMode, true);
+
+  // ---- Touch-friendly mode ----
+  function applyTouch(on) {
+    document.body.classList.toggle('touch', on);
+    localStorage.setItem('touchMode', on ? '1' : '0');
+    $('touchMode').checked = on;
+  }
+  $('touchMode').addEventListener('change', () => applyTouch($('touchMode').checked));
+  applyTouch(localStorage.getItem('touchMode') === '1');
+
+  // ---- Customise panel ----
+  function populateSettingsForm() {
+    $('setFont').value = settings.font;
+    $('setScale').value = settings.scale;
+    $('setScaleVal').textContent = Math.round(settings.scale * 100) + '%';
+    $('setBg').value = settings.bg;
+    $('setTimerC').value = settings.timerC;
+    $('setMsgC').value = settings.msgC;
+    $('setWarnC').value = settings.warnC;
+    $('setDangerC').value = settings.dangerC;
+    $('setWarnAt').value = settings.warnAt;
+    $('setFlash').checked = settings.flash;
+    $('set24h').checked = settings.clock24;
+    $('setTodAlongside').checked = settings.todAlongside;
+    $('setTodScale').value = settings.todScale;
+    $('setTodScaleVal').textContent = Math.round(settings.todScale * 100) + '%';
+    $('setTodPos').value = settings.todPos || 'tl';
+    syncTodScaleRow();
+    $('setShowNext').checked = settings.showNext;
+    $('setNextAt').value = settings.nextAt ? fmt(settings.nextAt) : '';
+    $('setNextPos').value = settings.nextPos || 'bottom';
+    $('setNextScale').value = settings.nextScale != null ? settings.nextScale : 1;
+    $('setNextScaleVal').textContent = Math.round((settings.nextScale != null ? settings.nextScale : 1) * 100) + '%';
+    syncNextAtRow();
+    $('setBrand').checked = settings.brand;
+    $('logoThumb').style.display = settings.logo ? 'block' : 'none';
+    if (settings.logo) $('logoThumb').src = settings.logo;
+  }
+
+  function settingChanged() { saveSettings(); pushSettings(); broadcast(true); }
+
+
+  $('setFont').addEventListener('change', () => { settings.font = $('setFont').value; settingChanged(); });
+  $('setScale').addEventListener('input', () => {
+    settings.scale = parseFloat($('setScale').value);
+    $('setScaleVal').textContent = Math.round(settings.scale * 100) + '%';
+    settingChanged();
+  });
+  [['setBg','bg'],['setTimerC','timerC'],['setMsgC','msgC'],['setWarnC','warnC'],['setDangerC','dangerC']]
+    .forEach(([id, key]) => {
+      $(id).addEventListener('input', () => { settings[key] = $(id).value; settingChanged(); });
+    });
+  $('setWarnAt').addEventListener('change', () => {
+    settings.warnAt = Math.max(0, parseInt($('setWarnAt').value, 10) || 0);
+    settingChanged();
+  });
+  $('setFlash').addEventListener('change', () => { settings.flash = $('setFlash').checked; settingChanged(); });
+  $('set24h').addEventListener('change', () => { settings.clock24 = $('set24h').checked; settingChanged(); });
+  // No point offering a size for something that isn't on screen — grey the row out
+  // rather than hide it, so it's discoverable before you enable the clock.
+  function syncTodScaleRow() {
+    const on = $('setTodAlongside').checked;
+    $('setTodScale').disabled = !on;
+    $('setTodPos').disabled = !on;
+    $('todScaleRow').style.opacity = on ? '1' : '.4';
+    $('todPosRow').style.opacity = on ? '1' : '.4';
+  }
+  $('setTodAlongside').addEventListener('change', () => {
+    settings.todAlongside = $('setTodAlongside').checked;
+    syncTodScaleRow();
+    settingChanged();
+  });
+  $('setTodPos').addEventListener('change', () => {
+    settings.todPos = $('setTodPos').value;
+    settingChanged();
+  });
+  $('setNextPos').addEventListener('change', () => {
+    settings.nextPos = $('setNextPos').value;
+    settingChanged();
+  });
+  $('setNextScale').addEventListener('input', () => {
+    settings.nextScale = parseFloat($('setNextScale').value);
+    $('setNextScaleVal').textContent = Math.round(settings.nextScale * 100) + '%';
+    settingChanged();
+  });
+  $('setTodScale').addEventListener('input', () => {
+    settings.todScale = parseFloat($('setTodScale').value);
+    $('setTodScaleVal').textContent = Math.round(settings.todScale * 100) + '%';
+    settingChanged();
+  });
+  function syncNextAtRow() {
+    const on = $('setShowNext').checked;
+    $('setNextAt').disabled = !on;
+    $('setNextPos').disabled = !on;
+    $('setNextScale').disabled = !on;
+    $('nextAtRow').style.opacity = on ? '1' : '.4';
+    document.querySelectorAll('.nextopt').forEach(r => r.style.opacity = on ? '1' : '.4');
+    $('setNextAtVal').textContent = settings.nextAt
+      ? 'last ' + fmt(settings.nextAt) : 'whole cue';
+  }
+  $('setShowNext').addEventListener('change', () => {
+    settings.showNext = $('setShowNext').checked;
+    syncNextAtRow();
+    settingChanged();
+  });
+  // Accepts mm:ss (or h:mm:ss, or bare seconds) via the same parser the CSV import
+  // uses. Blank means the whole cue. Unreadable input reverts rather than silently
+  // resetting the threshold to zero mid-show.
+  $('setNextAt').addEventListener('change', () => {
+    const raw = $('setNextAt').value.trim();
+    if (!raw) {
+      settings.nextAt = 0;
+    } else {
+      const secs = parseDuration(raw);
+      if (secs === null || secs < 0) {
+        $('setNextAt').value = settings.nextAt ? fmt(settings.nextAt) : '';
+        return;
+      }
+      settings.nextAt = secs;
+      $('setNextAt').value = fmt(secs);
+    }
+    syncNextAtRow();
+    settingChanged();
+  });
+  $('setBrand').addEventListener('change', () => { settings.brand = $('setBrand').checked; settingChanged(); });
+
+  $('logoPickBtn').addEventListener('click', () => $('setLogo').click());
+  $('setLogo').addEventListener('change', () => {
+    const file = $('setLogo').files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { say('Logo too large', 'Keep the logo under 3 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      settings.logo = reader.result;
+      populateSettingsForm();
+      settingChanged();
+    };
+    reader.readAsDataURL(file);
+  });
+  $('logoClearBtn').addEventListener('click', () => {
+    settings.logo = null;
+    $('setLogo').value = '';
+    populateSettingsForm();
+    settingChanged();
+  });
+
+  $('setDefaultsBtn').addEventListener('click', () => {
+    settings = Object.assign({}, defaultSettings);
+    populateSettingsForm();
+    settingChanged();
+  });
+
+  // ---- Keyboard shortcuts (editable) ----
+  const defaultKeymap = {
+    startPause: 'Space',
+    reset: 'KeyR',
+    tod: 'KeyT',
+    plus1: 'ArrowUp',
+    minus1: 'ArrowDown',
+    plus5: 'ArrowRight',
+    clearMsg: 'KeyC'
+  };
+  const actionLabels = {
+    startPause: 'Start / pause',
+    reset: 'Reset',
+    tod: 'Time of day toggle',
+    plus1: '+1 minute',
+    minus1: '−1 minute',
+    plus5: '+5 minutes',
+    clearMsg: 'Clear message'
+  };
+  const actionFns = {
+    startPause: () => $('startBtn').click(),
+    reset: () => $('resetBtn').click(),
+    tod: () => $('todBtn').click(),
+    plus1: () => { remaining += 60; broadcast(); },
+    minus1: () => { remaining -= 60; broadcast(); },
+    plus5: () => { remaining += 300; broadcast(); },
+    clearMsg: () => { message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); broadcast(); }
+  };
+  let keymap = Object.assign({}, defaultKeymap,
+    JSON.parse(localStorage.getItem('keymap') || '{}'));
+  let captureAction = null;
+
+  function saveKeymap() { localStorage.setItem('keymap', JSON.stringify(keymap)); }
+
+  function prettyKey(code) {
+    if (!code) return '—';
+    if (code === 'Space') return 'Space';
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code.startsWith('Numpad')) return 'Num ' + code.slice(6);
+    const arrows = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+    return arrows[code] || code;
+  }
+
+  function renderKeys() {
+    const list = $('keyList');
+    list.innerHTML = '';
+    Object.keys(actionLabels).forEach(action => {
+      const row = document.createElement('div');
+      row.className = 'crow';
+      const lab = document.createElement('label');
+      lab.textContent = actionLabels[action];
+      const chip = document.createElement('button');
+      chip.className = 'keychip' + (captureAction === action ? ' listening' : '');
+      chip.textContent = captureAction === action ? 'Press a key…' : prettyKey(keymap[action]);
+      chip.addEventListener('click', () => {
+        captureAction = captureAction === action ? null : action;
+        renderKeys();
+      });
+      row.append(lab, chip);
+      list.appendChild(row);
+    });
+    paintKeyHints();
+  }
+
+  $('keysDefaultsBtn').addEventListener('click', () => {
+    keymap = Object.assign({}, defaultKeymap);
+    captureAction = null;
+    saveKeymap();
+    renderKeys();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    // rebinding: capture the next key press
+    if (captureAction) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code !== 'Escape') {
+        // unassign this key from any other action first
+        Object.keys(keymap).forEach(a => { if (keymap[a] === e.code) keymap[a] = null; });
+        keymap[captureAction] = e.code;
+        saveKeymap();
+      }
+      captureAction = null;
+      renderKeys();
+      return;
+    }
+    // Undo: the one modifier binding, and not part of the remappable keymap.
+    if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ' && !e.shiftKey) {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;  // let the field undo its own text
+      e.preventDefault();
+      undo();
+      return;
+    }
+    if (e.code === 'Escape' && $('speedRow').classList.contains('armed')) {
+      e.preventDefault();
+      armSpeed(false);
+      return;
+    }
+    // Escape closes the schedule popover. Checked before the field bail below,
+    // because focus is normally sitting in one of its time inputs.
+    if (e.code === 'Escape' && schedPopOpen()) {
+      e.preventDefault();
+      closeSchedPop();
+      return;
+    }
+    if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return;
+    if ($('settingsModal').classList.contains('open') || $('cueModal').classList.contains('open')
+        || $('askModal').classList.contains('open') || $('importModal').classList.contains('open')
+        || schedPopOpen()) return;
+    // Bare keys only. Without this, the keymap matched on e.code alone and ignored
+    // modifiers — so ⌘R fired Reset as well as reloading, and ⌘T fired the TOD
+    // toggle. The keymap itself is untouched; it's the matching that was wrong.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const action = Object.keys(keymap).find(a => keymap[a] === e.code);
+    if (action) {
+      e.preventDefault();
+      actionFns[action]();
+      return;
+    }
+    // Digits 1-9 (0 = cue 10) ARM a cue for GO. They deliberately do NOT load it:
+    // loadCue() sets running = false and overwrites remaining, so a stray keypress
+    // used to stop a live clock and replace the number on the presenter's screen.
+    // Arming is inert — nothing reaches the output until GO.
+    // Checked after the keymap so a digit deliberately rebound to an action still wins.
+    if (!simpleMode) {
+      const m = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        const target = n === 0 ? 9 : n - 1;
+        if (cues[target]) {
+          e.preventDefault();
+          armedCue = target;
+          renderStatus();
+          renderCues();
+        }
+      }
+    }
+  }, true);
+
+  // v2: surface the bound key on the button it drives (display only — no new bindings)
+  const hintTargets = { startPause: 'startBtn', reset: 'resetBtn', tod: 'todBtn' };
+  function paintKeyHints() {
+    Object.entries(hintTargets).forEach(([action, id]) => {
+      const btn = $(id);
+      btn.querySelectorAll('.hint').forEach(h => h.remove());
+      if (!keymap[action]) return;
+      const s = document.createElement('span');
+      s.className = 'hint';
+      s.textContent = prettyKey(keymap[action]);
+      btn.appendChild(s);
+    });
+  }
+
+  // ---- Show files: save / load / new ----
+  function gatherShow() {
+    return {
+      app: 'StageCredit',
+      version: 1,
+      saved: new Date().toISOString(),
+      cues,
+      presets,
+      settings,
+      keymap,
+      // The plan belongs to the show, not the machine. Without these, a show file
+      // opened on the venue rig inherited whatever times were last used on it and
+      // reported drift against a different show's schedule.
+      plannedStart,
+      hardOut
+    };
+  }
+
+  function applyShow(data) {
+    running = false;
+    activeCue = -1;
+    todMode = false;
+    countUp = false;
+    blackout = false;
+    armedCue = null;
+    message = '';
+    msgSource = null;
+    cues = (data.cues || []).map(normaliseCue);
+    presets = Array.isArray(data.presets) ? data.presets.filter(p => p && p.trim()) : defaultPresets.slice();
+    settings = Object.assign({}, defaultSettings, data.settings || {});
+    keymap = Object.assign({}, defaultKeymap, data.keymap || {});
+    // Absent in a file means "no plan", not "keep the last one" — otherwise New Show
+    // and older show files would quietly leave a stale schedule driving drift.
+    plannedStart = data.plannedStart || '';
+    hardOut = data.hardOut || '';
+    // A cue was just cleared out from under the as-run log; close its entry.
+    closeCueRun();
+    saveCues();
+    savePresets();
+    saveSettings();
+    saveKeymap();
+    saveSchedule();
+    pushSettings();
+    setFromInputs();
+    syncSchedInputs();
+    renderCues();
+    renderMsgs();
+    updateCustomBtn();
+    paintKeyHints();
+    paintSchedule();
+    broadcast();
+  }
+
+  $('saveShowBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.saveShow(gatherShow());
+    if (res && res.error) say('Could not save', res.error);
+  });
+
+  $('loadShowBtn').addEventListener('click', async () => {
+    const res = await window.timerAPI.loadShow();
+    if (!res || !res.ok) {
+      if (res && res.error) say('Could not load that file', res.error);
+      return;
+    }
+    if (!res.data || res.data.app !== 'StageCredit') {
+      say('Not a show file', 'That doesn\'t look like a StageCredit show file.');
+      return;
+    }
+    pushUndo('load show', true);
+    applyShow(res.data);
+  });
+
+  $('newShowBtn').addEventListener('click', async () => {
+    if (!await ask('Start a new show?',
+      'This clears the cue list, messages and settings. Undo can bring it back, but saving first is safer.',
+      'New show', true)) return;
+    pushUndo('new show', true);
+    applyShow({});
+  });
+
+  $('undoBtn').addEventListener('click', undo);
+
+  // ---- Boot overlay teardown ----
+  // Cleared once the panel is actually rendered AND the fonts have settled, so the
+  // operator never sees text reflow. The failsafe guarantees the overlay can never
+  // trap them behind it, whatever happens to fonts.ready.
+  let bootCleared = false;
+  function bootDone() {
+    if (bootCleared) return;
+    bootCleared = true;
+    const b = $('boot');
+    if (b) b.classList.add('done');
+  }
+  setTimeout(bootDone, 2500);
+
+  paintKeyHints();
+  renderUndo();
+  renderCues();
+  paintSchedule();
+  refreshDisplays();
+  pushSettings();
+  pushCues();
+  applyLock(false);
+  blankLabel();
+  paintSpeed();
+  pollOutputs();
+  refreshViewState();
+  window.timerAPI.serverStatus().then(st => { netInfo = st; renderNet(); });
+  broadcast(true);
+  requestAnimationFrame(tick);
+
+  if (document.fonts && document.fonts.ready) {
+    // one frame so the freshly-loaded font is painted before we uncover
+    document.fonts.ready.then(() => requestAnimationFrame(bootDone));
+  } else {
+    bootDone();
+  }
+  // periodic broadcast so a reopened display syncs even when paused.
+  // paintSchedule lives here rather than in broadcast(): it walks the whole cue list,
+  // and wall-clock projections only need refreshing once a second.
+  setInterval(() => {
+    broadcast(true); pollOutputs(); paintSchedule();
+    if (netInfo && netInfo.running) {
+      window.timerAPI.serverStatus().then(st => { netInfo = st; renderNet(); });
+    }
+  }, 1000);
+
+  }  // end initApp
+
+  // Two frames: the first lets layout settle, the second guarantees the overlay has
+  // actually been painted to screen before we take the main thread.
+  requestAnimationFrame(() => requestAnimationFrame(initApp));
+</script>
+</body>
+</html>

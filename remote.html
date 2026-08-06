@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2c2b3b">
+<!-- connect-src 'self' covers the same-origin WebSocket back to the app. No remote
+     origins, no eval. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>StageCredit — Remote</title>
+<link rel="stylesheet" href="fonts/montserrat.css">
+<style>
+  * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #2c2b3b; color: #f2f2f2; padding: 14px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    user-select: none; -webkit-user-select: none;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .brand { font-size: 13px; font-weight: 700; text-transform: lowercase; }
+  .brand span { color: #ffcc02; font-size: .5em; font-weight: 800; vertical-align: .75em; }
+  .conn { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; font-weight: 700; color: #6f6e80; }
+  .conn.ok { color: #3ddc84; }
+  .conn.bad { color: #ff4d4f; }
+
+  .clock {
+    background: #111; border-radius: 12px; padding: 12px 14px 14px;
+    border-left: 5px solid #9b9aad; font-variant-numeric: tabular-nums;
+  }
+  .clock.running { border-left-color: #3ddc84; }
+  .clock.paused { border-left-color: #ffcc02; }
+  .clock.over { border-left-color: #ff4d4f; }
+  .state { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; color: #9b9aad; }
+  .clock.running .state { color: #3ddc84; }
+  .clock.paused .state { color: #ffcc02; }
+  .clock.over .state { color: #ff4d4f; }
+  .big { font-size: clamp(56px, 22vw, 130px); line-height: 1.05; font-weight: 800; letter-spacing: -.02em; }
+  .cuenm { font-size: 12px; color: #9b9aad; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  button {
+    border: none; border-radius: 10px; background: #454458; color: #f2f2f2;
+    font-family: inherit; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .06em; font-size: 14px; padding: 18px 10px; cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { background: #3a3948; color: #6f6e80; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  .row > * { flex: 1; }
+  .start { background: #ffcc02; color: #111; flex: 2.2; font-size: 17px; padding: 24px 10px; }
+  .pause { background: #f2f2f2; color: #111; flex: 2.2; font-size: 17px; padding: 24px 10px; }
+  .quick { background: #23222f; font-size: 12px; padding: 14px 6px; }
+  .on { background: #ffcc02; color: #111; }
+  .danger { background: #ff4d4f; color: #fff; }
+  label {
+    display: block; font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    font-weight: 700; color: #9b9aad; margin: 16px 0 6px;
+  }
+  .nextbar { margin-top: 8px; background: #23222f; border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+  .nextbar .m { flex: 1; min-width: 0; }
+  .nextbar .l { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #9b9aad; font-weight: 700; }
+  .nextbar .v { font-size: 13px; font-weight: 600; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #go { flex: 0 0 auto; padding: 16px 24px; background: #ffcc02; color: #111; }
+
+  .cue {
+    display: flex; align-items: center; gap: 8px; background: #23222f;
+    border-radius: 8px; padding: 12px 10px; margin-bottom: 6px;
+    border-left: 3px solid transparent;
+  }
+  .cue.active { border-left-color: #3ddc84; background: #2a2937; }
+  .cue .i { font-size: 11px; color: #6f6e80; width: 16px; flex: 0 0 auto; }
+  .cue .n { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cue .d { font-size: 12px; color: #9b9aad; font-variant-numeric: tabular-nums; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: #454458; border-radius: 18px; padding: 12px 16px; font-size: 12px; }
+  .onair { font-size: 11px; color: #ffcc02; background: #332d14; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-weight: 700; display: none; }
+  .onair.show { display: block; }
+  .note { font-size: 11px; color: #6f6e80; line-height: 1.5; margin-top: 14px; }
+  .empty { font-size: 12px; color: #6f6e80; padding: 8px 0; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <span class="brand">soundcredit<span>.tv</span> remote</span>
+    <span class="conn" id="conn">connecting</span>
+  </div>
+
+  <div class="clock" id="clockBox">
+    <div class="state" id="stateLbl">—</div>
+    <div class="big" id="big">--:--</div>
+    <div class="cuenm" id="cueNm"></div>
+  </div>
+
+  <div class="row">
+    <button class="start" id="toggle">Start</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div class="row">
+    <button class="quick" id="tod">TOD</button>
+    <button class="quick" id="blank">Blank</button>
+    <button class="quick" data-add="-60">−1</button>
+    <button class="quick" data-add="60">+1</button>
+    <button class="quick" data-add="300">+5</button>
+  </div>
+
+  <div class="nextbar">
+    <div class="m"><div class="l">Next</div><div class="v" id="nextVal">—</div></div>
+    <button id="go" disabled>GO</button>
+  </div>
+
+  <label>Cue list</label>
+  <div id="cues"><div class="empty">No cues</div></div>
+
+  <label>Messages</label>
+  <div class="onair" id="onair"></div>
+  <div class="chips" id="msgs"></div>
+  <div class="row"><button class="danger" id="clearMsg">Clear message</button></div>
+
+  <div class="note" id="note"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  // Token comes in on the URL the control panel shows, then persists so the page can
+  // be reloaded or bookmarked without it.
+  const qs = new URLSearchParams(location.search);
+  let token = qs.get('t') || localStorage.getItem('scToken') || '';
+  if (qs.get('t')) localStorage.setItem('scToken', qs.get('t'));
+
+  let ws = null, retry = 500, controller = false;
+  let cues = [], presets = [], st = null;
+
+  function setConn(text, cls) {
+    $('conn').textContent = text;
+    $('conn').className = 'conn ' + (cls || '');
+  }
+
+  function send(action, value) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'action', action, value }));
+  }
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws?t=' + encodeURIComponent(token));
+    ws.onopen = () => { retry = 500; setConn('live', 'ok'); };
+    ws.onmessage = ev => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === 'snapshot') {
+        controller = !!m.controller;
+        if (!controller) setConn('read only', 'bad');
+        if (m.cues) cues = m.cues;
+        if (m.settings) presets = m.settings.presets || presets;
+        renderCues();
+        if (m.state) paint(m.state);
+      } else if (m.type === 'state') paint(m.state);
+      else if (m.type === 'cues') { cues = m.cues || []; renderCues(); }
+      else if (m.type === 'settings') { presets = (m.settings && m.settings.presets) || presets; renderMsgs(); }
+    };
+    // Venue wifi drops. Back off, and say so rather than looking live while stale.
+    ws.onclose = () => { setConn('reconnecting', 'bad'); setTimeout(connect, retry); retry = Math.min(retry * 2, 8000); };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  }
+
+  function fmt(s) {
+    const neg = s < 0, a = Math.abs(Math.ceil(s));
+    return (neg ? '+' : '') + Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+  function fmtUp(s) {
+    const a = Math.max(0, Math.floor(s));
+    return Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+  }
+
+  function paint(state) {
+    if (!state) return;
+    st = state;
+    const over = !state.tod && !state.countup && state.remaining <= 0;
+    const box = $('clockBox');
+    box.className = 'clock' + (state.tod ? '' : over ? ' over' : state.running ? ' running' : ' paused');
+
+    let lbl = state.blackout ? 'Blanked' : state.tod ? 'Time of day'
+      : over ? (state.running ? 'Overtime' : 'Time up') : state.running ? 'Running' : 'Paused';
+    lbl += state.cueIndex >= 0 ? ' · cue ' + (state.cueIndex + 1) : ' · manual';
+    $('stateLbl').textContent = lbl;
+
+    $('big').textContent = state.tod ? new Date().toTimeString().slice(0, 8)
+      : state.countup ? fmtUp(state.remaining) : fmt(state.remaining);
+    $('cueNm').textContent = state.cueName || '';
+
+    const t = $('toggle');
+    t.textContent = state.running ? 'Pause' : 'Start';
+    t.className = state.running ? 'pause' : 'start';
+    $('blank').className = state.blackout ? 'quick on' : 'quick';
+    $('tod').className = state.tod ? 'quick on' : 'quick';
+
+    const ni = state.cueIndex >= 0 ? state.cueIndex + 1 : 0;
+    const n = cues[ni];
+    $('nextVal').textContent = n ? (ni + 1) + '. ' + n.name : (cues.length ? 'End of list' : 'No cues');
+    $('go').disabled = !n || !controller;
+
+    $('onair').className = state.message ? 'onair show' : 'onair';
+    $('onair').textContent = state.message ? 'ON SCREEN: ' + state.message : '';
+    renderCues();
+    document.querySelectorAll('button').forEach(b => { if (b.id !== 'go') b.disabled = !controller; });
+    $('go').disabled = !n || !controller;
+  }
+
+  function renderCues() {
+    const box = $('cues');
+    if (!cues.length) { box.innerHTML = '<div class="empty">No cues</div>'; return; }
+    box.innerHTML = '';
+    cues.forEach((c, i) => {
+      const d = document.createElement('div');
+      d.className = 'cue' + (st && st.cueIndex === i ? ' active' : '');
+      d.innerHTML = '<span class="i"></span><span class="n"></span><span class="d"></span>';
+      d.querySelector('.i').textContent = i + 1;
+      d.querySelector('.n').textContent = c.name;
+      d.querySelector('.d').textContent = c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      // 1-based to match the cue numbers on screen and the documented API
+      d.addEventListener('click', () => { if (controller) send('cue', String(i + 1)); });
+      box.appendChild(d);
+    });
+  }
+
+  function renderMsgs() {
+    const box = $('msgs');
+    box.innerHTML = '';
+    if (!presets.length) { box.innerHTML = '<div class="empty">No presets</div>'; return; }
+    presets.forEach((text, i) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (st && st.message === text ? ' on' : '');
+      b.textContent = text;
+      b.addEventListener('click', () => send('preset', String(i + 1)));
+      box.appendChild(b);
+    });
+  }
+
+  $('toggle').addEventListener('click', () => send('toggle'));
+  $('reset').addEventListener('click', () => send('reset'));
+  $('tod').addEventListener('click', () => send('tod'));
+  $('blank').addEventListener('click', () => send('blank'));
+  $('go').addEventListener('click', () => send('go'));
+  $('clearMsg').addEventListener('click', () => send('clearmessage'));
+  document.querySelectorAll('[data-add]').forEach(b =>
+    b.addEventListener('click', () => send('add', b.dataset.add)));
+
+  if (!token) {
+    setConn('no token', 'bad');
+    $('note').textContent = 'Open the link shown in the StageCredit control panel — the remote needs its token.';
+  } else {
+    $('note').textContent = 'Stays connected while this page is open. If the network drops it reconnects on its own.';
+    connect();
+  }
+</script>
+</body>
+</html>
