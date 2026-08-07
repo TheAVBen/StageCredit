@@ -26,8 +26,11 @@
       "server.js",
       "asrun.js",
       "control.html",
+      "control-app.js",
       "display.html",
+      "display-app.js",
       "remote.html",
+      "remote-app.js",
       "fonts/**"
     ],
     "mac": {

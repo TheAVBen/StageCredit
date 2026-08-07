@@ -57,9 +57,12 @@ const ACTIONS = [
   'go', 'next', 'prev', 'cue', 'add', 'set', 'message', 'clearmessage', 'preset'
 ];
 
+// Mirrored in display/remote (and control) meta tags. Scripts are external JS files
+// so script-src is 'self' only. style-src keeps 'unsafe-inline' for <style> blocks
+// and inline style attributes (see docs/review/fix-status.md).
 const CSP_HTML = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
@@ -69,6 +72,9 @@ const CSP_HTML = [
   "form-action 'none'",
   "frame-ancestors 'none'"
 ].join('; ');
+
+// Only these root-level scripts may be served over LAN (display + remote pages).
+const ALLOWED_APP_SCRIPTS = new Set(['/display-app.js', '/remote-app.js']);
 
 function localAddresses() {
   const out = [];
@@ -281,6 +287,9 @@ module.exports = function createServer(opts) {
     }
 
     if (p.startsWith('/fonts/')) return sendFile(res, p);
+
+    // App page scripts (L10 modularization) — allow-listed, not a general static tree.
+    if (ALLOWED_APP_SCRIPTS.has(p)) return sendFile(res, p);
 
     send(res, 404, 'Not found');
   }
