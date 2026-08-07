@@ -942,7 +942,11 @@
       countUp = false;
       renderCues();
     }
-    broadcast();
+    // Must force: while TOD is on, tick() already broadcasts every frame and fills the
+    // wire / local-paint throttle windows. A non-forced broadcast often early-returns;
+    // after TOFF, tick no longer paints while paused, so the desk and display would
+    // stay on time-of-day until something else force-pushes (e.g. Reset).
+    broadcast(true);
   });
 
   $('resetBtn').addEventListener('click', () => {
@@ -1012,7 +1016,7 @@
     countUp = false;
     setFromInputs();
     renderCues();
-    broadcast();
+    broadcast(true);
     $('min').focus();
     $('min').select();
   }
