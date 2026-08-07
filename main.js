@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -15,6 +15,7 @@ let controlWin = null;
 let quitting = false;
 let server = null;
 let asrun = null;
+let serverOp = Promise.resolve(); // serialises start/stop (M6)
 
 // Two output views of the same clock:
 //   presenter — the full display: name, subtitle, messages, next up
@@ -24,23 +25,54 @@ let asrun = null;
 const VIEWS = ['presenter', 'clock'];
 const displayWins = { presenter: null, clock: null };
 
+const CONTROL_PRELOAD = path.join(__dirname, 'preload-control.js');
+const DISPLAY_PRELOAD = path.join(__dirname, 'preload-display.js');
+
+// Explicit security prefs — Electron 43 defaults are already safe; pin intent. (L4)
+const SECURE_WEB_PREFS = {
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  webviewTag: false,
+  allowRunningInsecureContent: false
+};
+
 // ---- Display window state persistence ----
 const statePath = () => path.join(app.getPath('userData'), 'display-state.json');
+let liveStateCache = null;
+let persistTimer = null;
 
 function readState() {
-  try { return JSON.parse(fs.readFileSync(statePath(), 'utf8')); }
-  catch { return null; }
+  if (liveStateCache) return liveStateCache;
+  try {
+    liveStateCache = JSON.parse(fs.readFileSync(statePath(), 'utf8'));
+    return liveStateCache;
+  } catch {
+    return null;
+  }
 }
 
 function writeState(state) {
+  liveStateCache = state;
   try { fs.writeFileSync(statePath(), JSON.stringify(state)); } catch {}
+}
+
+// Debounced disk I/O (M10): drag/resize floods main; memory cache stays current.
+function schedulePersistWrite() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (liveStateCache) {
+      try { fs.writeFileSync(statePath(), JSON.stringify(liveStateCache)); } catch {}
+    }
+  }, 400);
 }
 
 // Persisted per view. Only writes for windows that are alive, so teardown can never
 // downgrade the remembered state; "closed" is written only when the user closes a
 // display window themselves.
 function persistLive() {
-  const saved = readState() || {};
+  const saved = Object.assign({}, readState() || {});
   VIEWS.forEach(view => {
     const w = displayWins[view];
     if (w && !w.isDestroyed()) {
@@ -52,13 +84,15 @@ function persistLive() {
       };
     }
   });
-  writeState(saved);
+  liveStateCache = saved;
+  schedulePersistWrite();
 }
 
 function markClosed(view) {
-  const saved = readState() || {};
+  const saved = Object.assign({}, readState() || {});
   saved[view] = { open: false };
-  writeState(saved);
+  liveStateCache = saved;
+  try { fs.writeFileSync(statePath(), JSON.stringify(saved)); } catch {}
 }
 
 // Is the screen this window was last on still attached? Fullscreen state is pinned to
@@ -76,6 +110,34 @@ function screenStillThere(s) {
   });
 }
 
+function isControlSender(event) {
+  return controlWin && !controlWin.isDestroyed()
+    && event.sender === controlWin.webContents;
+}
+
+function attachWebContentsGuards(contents) {
+  // H4: never navigate privileged windows off app file:// documents
+  contents.on('will-navigate', (e, url) => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'file:') {
+        const target = path.normalize(decodeURIComponent(u.pathname));
+        const root = path.normalize(__dirname);
+        if (target === root || target.startsWith(root + path.sep)) return;
+      }
+    } catch {}
+    e.preventDefault();
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    // Allow-list external open only for http(s); never create a new BrowserWindow with preload.
+    if (/^https?:/i.test(url)) {
+      shell.openExternal(url).catch(() => {});
+    }
+    return { action: 'deny' };
+  });
+  contents.on('will-attach-webview', (e) => { e.preventDefault(); });
+}
+
 function createDisplayWindow(view, restore) {
   const opts = {
     width: 800,
@@ -83,7 +145,7 @@ function createDisplayWindow(view, restore) {
     title: view === 'clock' ? 'StageCredit — Clock' : 'StageCredit — Display',
     backgroundColor: '#111111',
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js') }
+    webPreferences: Object.assign({}, SECURE_WEB_PREFS, { preload: DISPLAY_PRELOAD })
   };
   if (restore && restore.bounds) Object.assign(opts, restore.bounds);
   const win = new BrowserWindow(opts);
@@ -109,6 +171,31 @@ function createDisplayWindow(view, restore) {
   return win;
 }
 
+// H10: wait for leave-full-screen before moving to another display (macOS stuck-window).
+function placeFullscreenOnDisplay(win, target) {
+  const place = () => {
+    if (!win || win.isDestroyed()) return;
+    win.setBounds({ x: target.bounds.x + 40, y: target.bounds.y + 40, width: 800, height: 500 });
+    win.setFullScreen(true);
+    win.focus();
+  };
+  if (!win.isFullScreen()) {
+    place();
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    win.removeListener('leave-full-screen', onLeave);
+    place();
+  };
+  const onLeave = () => finish();
+  win.once('leave-full-screen', onLeave);
+  win.setFullScreen(false);
+  setTimeout(finish, 800);
+}
+
 function createWindows() {
   controlWin = new BrowserWindow({
     width: 1040,
@@ -121,9 +208,35 @@ function createWindows() {
     // at no window at all. The in-page boot overlay covers the load instead.
     backgroundColor: '#2c2b3b',
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js') }
+    // C1: control owns the programme clock on rAF — do not throttle when backgrounded.
+    webPreferences: Object.assign({}, SECURE_WEB_PREFS, {
+      preload: CONTROL_PRELOAD,
+      backgroundThrottling: false
+    })
   });
   controlWin.loadFile('control.html');
+
+  // M2: confirm close while the clock is running
+  controlWin.on('close', (e) => {
+    if (quitting) return;
+    if (latestState && latestState.running) {
+      e.preventDefault();
+      dialog.showMessageBox(controlWin, {
+        type: 'warning',
+        buttons: ['Keep running', 'Quit'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Clock is running',
+        message: 'Quit StageCredit while the timer is running?',
+        detail: 'Closing the control window stops the programme clock and closes display outputs.'
+      }).then(res => {
+        if (res.response === 1) {
+          quitting = true;
+          controlWin.close();
+        }
+      }).catch(() => {});
+    }
+  });
 
   controlWin.on('closed', () => {
     if (!quitting) {
@@ -132,7 +245,8 @@ function createWindows() {
     }
     controlWin = null;
     VIEWS.forEach(v => { if (displayWins[v]) displayWins[v].close(); });
-    if (server) server.stop();
+    // L6: stop is fire-and-forget here (window already gone); before-quit awaits.
+    if (server) { server.stop().catch(() => {}); server = null; }
   });
 
   const saved = readState() || {};
@@ -182,7 +296,21 @@ function eachDisplay(fn) {
   });
 }
 
-ipcMain.on('timer-update', (_event, state) => {
+function onControl(channel, handler) {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isControlSender(event)) return;
+    handler(event, ...args);
+  });
+}
+
+function handleControl(channel, handler) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    if (!isControlSender(event)) return { ok: false, error: 'Forbidden' };
+    return handler(event, ...args);
+  });
+}
+
+onControl('timer-update', (_event, state) => {
   latestState = state;
   eachDisplay(w => w.webContents.send('timer-update', state));
   if (server) server.pushState(state);
@@ -190,72 +318,123 @@ ipcMain.on('timer-update', (_event, state) => {
 
 // Settings arrive only when they change — they carry the logo data URL, which is far
 // too big to ride along with every state tick.
-ipcMain.on('timer-settings', (_event, settings) => {
+onControl('timer-settings', (_event, settings) => {
   latestSettings = settings;
   eachDisplay(w => w.webContents.send('timer-settings', settings));
   if (server) server.pushSettings(settings);
 });
 
 // A freshly loaded display window asks for the current picture rather than waiting.
+// Any window may request a snapshot (display or control).
 ipcMain.handle('request-snapshot', () => ({ state: latestState, settings: latestSettings }));
 
-// ---- Remote command relay ----
-// Commands from the LAN (remote page, Companion) go to the control renderer, which
-// owns the clock and already knows how to perform each action.
+// ---- Remote command relay (M7: request/response with applied status) ----
+let remoteSeq = 0;
+const remotePending = new Map();
+
 function dispatchRemote(action, value) {
-  if (!controlWin || controlWin.isDestroyed()) return { ok: false, error: 'Control window not available' };
-  controlWin.webContents.send('remote-action', { action, value });
-  return { ok: true };
+  return new Promise((resolve) => {
+    if (!controlWin || controlWin.isDestroyed()) {
+      resolve({ ok: false, error: 'Control window not available', applied: false });
+      return;
+    }
+    const id = ++remoteSeq;
+    const timer = setTimeout(() => {
+      if (!remotePending.has(id)) return;
+      remotePending.delete(id);
+      resolve({ ok: true, applied: false, error: 'timeout' });
+    }, 2000);
+    remotePending.set(id, (result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+    controlWin.webContents.send('remote-action', { action, value, id });
+  });
 }
 
+onControl('remote-action-result', (_event, payload) => {
+  if (!payload || payload.id == null) return;
+  const cb = remotePending.get(payload.id);
+  if (!cb) return;
+  remotePending.delete(payload.id);
+  cb({
+    ok: true,
+    applied: !!payload.applied,
+    error: payload.error || undefined,
+    detail: payload.detail
+  });
+});
+
 // ---- Cue list mirror ----
-// The remote needs the cue list, which lives in the renderer's localStorage. It
-// pushes a lightweight copy whenever the list changes.
-let latestCues = [];
-ipcMain.on('cues-changed', (_event, cues) => {
-  latestCues = cues || [];
+// Shape: { cues: [...], presets: [...] }. Server flattens for the wire (H1).
+let latestCues = { cues: [], presets: [] };
+onControl('cues-changed', (_event, cues) => {
+  if (Array.isArray(cues)) latestCues = { cues, presets: [] };
+  else latestCues = {
+    cues: (cues && cues.cues) || [],
+    presets: (cues && cues.presets) || []
+  };
   if (server) server.pushCues(latestCues);
 });
 
 // ---- As-run log ----
-ipcMain.on('asrun-event', (_event, entry) => { if (asrun) asrun.append(entry); });
-ipcMain.handle('asrun-read', () => (asrun ? asrun.readAll() : []));
-ipcMain.handle('asrun-clear', () => { if (asrun) asrun.clear(); return { ok: true }; });
-ipcMain.handle('asrun-path', () => (asrun ? asrun.file : null));
+onControl('asrun-event', (_event, entry) => { if (asrun) asrun.append(entry); });
+handleControl('asrun-read', () => (asrun ? asrun.readAll() : []));
+handleControl('asrun-clear', () => { if (asrun) asrun.clear(); return { ok: true }; });
+handleControl('asrun-path', () => (asrun ? asrun.file : null));
 
-// ---- Server control ----
-ipcMain.handle('server-status', () => (server ? server.status() : { running: false }));
-ipcMain.handle('server-start', async (_event, opts) => {
-  if (server) await server.stop();
-  server = createServer({
-    port: (opts && opts.port) || 8080,
-    token: (opts && opts.token) || null,
-    getSnapshot: () => ({ state: latestState, settings: latestSettings, cues: latestCues }),
-    dispatch: dispatchRemote,
-    root: __dirname
-  });
+// ---- Server control (M6 mutex) ----
+ipcMain.handle('server-status', (event) => {
+  if (!isControlSender(event)) return { running: false };
+  return server ? server.status() : { running: false };
+});
+
+handleControl('server-start', async (_event, opts) => {
+  await serverOp;
+  let release;
+  serverOp = new Promise(r => { release = r; });
   try {
-    const info = await server.start();
-    return { ok: true, ...info };
-  } catch (err) {
-    server = null;
-    return { ok: false, error: String(err && err.message || err) };
+    if (server) await server.stop();
+    server = createServer({
+      port: (opts && opts.port) || 8080,
+      token: (opts && opts.token) || null,
+      getSnapshot: () => ({ state: latestState, settings: latestSettings, cues: latestCues }),
+      dispatch: dispatchRemote,
+      root: __dirname
+    });
+    try {
+      const info = await server.start();
+      return { ok: true, ...info };
+    } catch (err) {
+      server = null;
+      return { ok: false, error: String(err && err.message || err) };
+    }
+  } finally {
+    release();
   }
 });
-ipcMain.handle('server-stop', async () => {
-  if (server) await server.stop();
-  server = null;
-  return { ok: true };
+
+handleControl('server-stop', async () => {
+  await serverOp;
+  let release;
+  serverOp = new Promise(r => { release = r; });
+  try {
+    if (server) await server.stop();
+    server = null;
+    return { ok: true };
+  } finally {
+    release();
+  }
 });
 
-ipcMain.handle('get-displays', () => {
+handleControl('get-displays', () => {
   return screen.getAllDisplays().map((d, i) => ({
     id: d.id,
     label: `Display ${i + 1} — ${d.size.width}×${d.size.height}${d.internal ? ' (built-in)' : ''}`
   }));
 });
 
-ipcMain.on('fullscreen-on-display', (_event, payload) => {
+onControl('fullscreen-on-display', (_event, payload) => {
   const view = (payload && payload.view) || 'presenter';
   const displayId = payload && payload.displayId;
   if (!VIEWS.includes(view)) return;
@@ -263,30 +442,27 @@ ipcMain.on('fullscreen-on-display', (_event, payload) => {
   if (!win || win.isDestroyed()) win = createDisplayWindow(view);
   const target = screen.getAllDisplays().find(d => d.id === displayId);
   if (!target) return;
-  win.setFullScreen(false);
-  win.setBounds({ x: target.bounds.x + 40, y: target.bounds.y + 40, width: 800, height: 500 });
-  win.setFullScreen(true);
-  win.focus();
+  placeFullscreenOnDisplay(win, target);
 });
 
-ipcMain.on('exit-fullscreen', (_event, view) => {
+onControl('exit-fullscreen', (_event, view) => {
   const w = displayWins[(view && VIEWS.includes(view)) ? view : 'presenter'];
   if (w && !w.isDestroyed()) w.setFullScreen(false);
 });
 
-ipcMain.on('reopen-display', (_event, view) => {
+onControl('reopen-display', (_event, view) => {
   const v = (view && VIEWS.includes(view)) ? view : 'presenter';
   const w = displayWins[v];
   if (!w || w.isDestroyed()) createDisplayWindow(v);
   else w.focus();
 });
 
-ipcMain.on('close-display', (_event, view) => {
+onControl('close-display', (_event, view) => {
   const w = displayWins[(view && VIEWS.includes(view)) ? view : 'presenter'];
   if (w && !w.isDestroyed()) w.close();
 });
 
-ipcMain.handle('display-windows', () => {
+handleControl('display-windows', () => {
   const out = {};
   VIEWS.forEach(v => {
     const w = displayWins[v];
@@ -296,11 +472,39 @@ ipcMain.handle('display-windows', () => {
 });
 
 // ---- Show files (save / load) ----
-ipcMain.handle('save-show', async (_event, data) => {
+// N2: fixed filters + safe default basename only from renderer.
+function safeBasename(p, fallback) {
+  const base = path.basename(String(p || fallback || 'file.txt'));
+  // strip path separators that might sneak in
+  return base.replace(/[/\\]/g, '_') || fallback || 'file.txt';
+}
+
+const FILTER_MAP = {
+  show: [{ name: 'StageCredit Show', extensions: ['stagecredit'] }],
+  showLoad: [{ name: 'StageCredit Show', extensions: ['stagecredit', 'json'] }],
+  csv: [{ name: 'CSV', extensions: ['csv'] }],
+  csvTxt: [{ name: 'CSV', extensions: ['csv', 'txt'] }],
+  text: [{ name: 'Text', extensions: ['txt'] }],
+  all: [{ name: 'All files', extensions: ['*'] }]
+};
+
+function resolveFilters(opts) {
+  if (opts && opts.filterKey && FILTER_MAP[opts.filterKey]) return FILTER_MAP[opts.filterKey];
+  if (opts && Array.isArray(opts.filters)) {
+    // Only allow extension lists of alphanumeric extensions
+    return opts.filters.map(f => ({
+      name: String(f.name || 'File').slice(0, 80),
+      extensions: (f.extensions || []).map(e => String(e).replace(/[^a-zA-Z0-9*]/g, '').slice(0, 12)).filter(Boolean)
+    })).filter(f => f.extensions.length);
+  }
+  return FILTER_MAP.all;
+}
+
+handleControl('save-show', async (_event, data) => {
   const res = await dialog.showSaveDialog(controlWin, {
     title: 'Save show',
     defaultPath: 'Untitled.stagecredit',
-    filters: [{ name: 'StageCredit Show', extensions: ['stagecredit'] }]
+    filters: FILTER_MAP.show
   });
   if (res.canceled || !res.filePath) return { ok: false };
   try {
@@ -311,11 +515,11 @@ ipcMain.handle('save-show', async (_event, data) => {
   }
 });
 
-ipcMain.handle('load-show', async () => {
+handleControl('load-show', async () => {
   const res = await dialog.showOpenDialog(controlWin, {
     title: 'Load show',
     properties: ['openFile'],
-    filters: [{ name: 'StageCredit Show', extensions: ['stagecredit', 'json'] }]
+    filters: FILTER_MAP.showLoad
   });
   if (res.canceled || !res.filePaths.length) return { ok: false };
   try {
@@ -326,11 +530,11 @@ ipcMain.handle('load-show', async () => {
 });
 
 // ---- Generic text file open/save (CSV import, template download, as-run export) ----
-ipcMain.handle('open-text-file', async (_event, opts) => {
+handleControl('open-text-file', async (_event, opts) => {
   const res = await dialog.showOpenDialog(controlWin, {
     title: (opts && opts.title) || 'Open file',
     properties: ['openFile'],
-    filters: (opts && opts.filters) || [{ name: 'All files', extensions: ['*'] }]
+    filters: resolveFilters(opts)
   });
   if (res.canceled || !res.filePaths.length) return { ok: false };
   try {
@@ -340,11 +544,11 @@ ipcMain.handle('open-text-file', async (_event, opts) => {
   }
 });
 
-ipcMain.handle('save-text-file', async (_event, opts) => {
+handleControl('save-text-file', async (_event, opts) => {
   const res = await dialog.showSaveDialog(controlWin, {
     title: (opts && opts.title) || 'Save file',
-    defaultPath: (opts && opts.defaultPath) || 'export.txt',
-    filters: (opts && opts.filters) || [{ name: 'All files', extensions: ['*'] }]
+    defaultPath: safeBasename(opts && opts.defaultPath, 'export.txt'),
+    filters: resolveFilters(opts)
   });
   if (res.canceled || !res.filePath) return { ok: false };
   try {
@@ -355,12 +559,62 @@ ipcMain.handle('save-text-file', async (_event, opts) => {
   }
 });
 
+// L7: unplug mid-show — warn and mark missing outputs closed like startup.
+function onDisplayRemoved() {
+  if (quitting) return;
+  let missing = false;
+  VIEWS.forEach(view => {
+    const w = displayWins[view];
+    if (!w || w.isDestroyed()) return;
+    const bounds = w.getBounds();
+    const s = {
+      fullscreen: w.isFullScreen(),
+      displayId: screen.getDisplayMatching(bounds).id,
+      bounds: w.getNormalBounds()
+    };
+    if (!screenStillThere(s)) {
+      missing = true;
+      try { w.close(); } catch {}
+      markClosed(view);
+    }
+  });
+  if (missing && controlWin && !controlWin.isDestroyed()) {
+    dialog.showMessageBox(controlWin, {
+      type: 'warning',
+      title: 'Display disconnected',
+      message: 'A display output was closed',
+      detail: 'The screen it was on is no longer connected. Reopen it from Display output when ready.'
+    }).catch(() => {});
+  }
+}
+
 app.whenReady().then(() => {
+  // H4: deny permissions by default; navigation guards on every webContents
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
+    callback(false);
+  });
+  app.on('web-contents-created', (_e, contents) => {
+    attachWebContentsGuards(contents);
+  });
+
   asrun = new AsRun(path.join(app.getPath('userData'), 'as-run.jsonl'));
   createWindows();
+  screen.on('display-removed', onDisplayRemoved);
 });
-app.on('before-quit', () => {
-  if (!quitting) { quitting = true; persistLive(); }
-  if (server) server.stop();
+
+app.on('before-quit', (e) => {
+  if (!quitting) {
+    quitting = true;
+    persistLive();
+  }
+  // L6: await server stop so LAN clients get a clean close
+  if (server) {
+    e.preventDefault();
+    const s = server;
+    server = null;
+    s.stop().finally(() => {
+      app.exit(0);
+    });
+  }
 });
 app.on('window-all-closed', () => app.quit());

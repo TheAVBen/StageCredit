@@ -21,6 +21,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "preload-control.js",
+      "preload-display.js",
       "server.js",
       "asrun.js",
       "control.html",

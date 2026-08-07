@@ -11,6 +11,10 @@
 //     require the token. An unauthenticated endpoint that can blackout the programme
 //     output is not acceptable on a venue network.
 // The token is generated per session and shown in the control panel.
+//
+// Origin/Host: HTTP pages may be opened from any LAN client (intentional for viewers).
+// WebSocket control messages accept no Origin or Origin matching this Host; other
+// browser origins cannot drive the show from a tab on a random site.
 
 const http = require('http');
 const fs = require('fs');
@@ -36,6 +40,16 @@ const MIME = {
   '.csv': 'text/csv; charset=utf-8'
 };
 
+// H3: never serve non-image / SVG logos (SVG can script same-origin).
+const LOGO_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
+
+function normaliseLogoMime(m) {
+  if (!m) return null;
+  const t = String(m).toLowerCase().split(';')[0].trim();
+  if (t === 'image/jpg') return 'image/jpeg';
+  return LOGO_MIME.has(t) ? (t === 'image/jpg' ? 'image/jpeg' : t) : null;
+}
+
 // Actions the API and remote may invoke. Anything not on this list is rejected —
 // an allow-list, so a typo or a probe can't reach into the renderer.
 const ACTIONS = [
@@ -43,41 +57,86 @@ const ACTIONS = [
   'go', 'next', 'prev', 'cue', 'add', 'set', 'message', 'clearmessage', 'preset'
 ];
 
+const CSP_HTML = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'"
+].join('; ');
+
 function localAddresses() {
   const out = [];
-  const ifaces = os.networkInterfaces();
-  Object.keys(ifaces).forEach(name => {
-    (ifaces[name] || []).forEach(i => {
-      if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+  try {
+    const ifaces = os.networkInterfaces();
+    Object.keys(ifaces || {}).forEach(name => {
+      (ifaces[name] || []).forEach(i => {
+        if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+      });
     });
-  });
+  } catch (e) {
+    // sandbox / restricted environments may deny interface enumeration
+  }
   return out;
+}
+
+function safeEqualToken(provided, expected) {
+  if (!provided || !expected) return false;
+  try {
+    const a = Buffer.from(String(provided));
+    const b = Buffer.from(String(expected));
+    if (a.length !== b.length) {
+      // still compare to itself to roughly equalise work; reject
+      crypto.timingSafeEqual(b, b);
+      return false;
+    }
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 module.exports = function createServer(opts) {
   const port = opts.port || 8080;
   const token = opts.token || crypto.randomBytes(9).toString('base64url');
   const root = opts.root;
+  const rootResolved = path.resolve(root);
   const getSnapshot = opts.getSnapshot;
   const dispatch = opts.dispatch;
 
   let httpServer = null;
   let wss = null;
   const sockets = new Set();
+  let authFailures = 0;
+
+  // M12: cache decoded logo buffer
+  let logoCache = { key: null, buf: null, mime: null };
 
   function authed(url, req) {
     const t = url.searchParams.get('t') || url.searchParams.get('token')
       || (req && req.headers['x-stagecredit-token']);
-    return !!t && t === token;
+    const ok = safeEqualToken(t, token);
+    if (!ok) authFailures++;
+    return ok;
   }
 
-  function send(res, code, body, type) {
-    res.writeHead(code, {
+  function baseHeaders(type, extra) {
+    return Object.assign({
       'Content-Type': type || 'text/plain; charset=utf-8',
       'Cache-Control': 'no-store',
-      // These pages are only ever framed by themselves.
-      'X-Content-Type-Options': 'nosniff'
-    });
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': CSP_HTML
+    }, extra || {});
+  }
+
+  function send(res, code, body, type, extra) {
+    res.writeHead(code, baseHeaders(type, extra));
     res.end(body);
   }
 
@@ -85,11 +144,12 @@ module.exports = function createServer(opts) {
     send(res, code, JSON.stringify(obj), MIME['.json']);
   }
 
-  // Serves a file from the app directory. Paths are resolved and then checked to be
-  // inside root, so ../ traversal can't escape into the filesystem.
+  // N1: path containment with path.sep (not bare startsWith)
   function sendFile(res, rel) {
     const full = path.resolve(root, '.' + path.posix.normalize('/' + rel));
-    if (!full.startsWith(path.resolve(root))) return send(res, 403, 'Forbidden');
+    if (full !== rootResolved && !full.startsWith(rootResolved + path.sep)) {
+      return send(res, 403, 'Forbidden');
+    }
     fs.readFile(full, (err, buf) => {
       if (err) return send(res, 404, 'Not found');
       send(res, 200, buf, MIME[path.extname(full).toLowerCase()] || 'application/octet-stream');
@@ -102,14 +162,22 @@ module.exports = function createServer(opts) {
   // since a served page has no query string to branch on.
   function sendPage(res, file, extraBodyClass) {
     const full = path.join(root, file);
-    fs.readFile(full, 'utf8', (err, html) => {
+    if (full !== rootResolved && !full.startsWith(rootResolved + path.sep)
+        && path.resolve(full) !== path.join(rootResolved, file)) {
+      // still resolve through join then check
+    }
+    const resolved = path.resolve(full);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
+      return send(res, 403, 'Forbidden');
+    }
+    fs.readFile(resolved, 'utf8', (err, html) => {
       if (err) return send(res, 404, 'Not found');
       if (extraBodyClass) html = html.replace('<body>', '<body class="' + extraBodyClass + '">');
       send(res, 200, html, MIME['.html']);
     });
   }
 
-  function handleAction(url, req, res) {
+  async function handleAction(url, req, res) {
     if (!authed(url, req)) return sendJson(res, 401, { ok: false, error: 'Bad or missing token' });
     const action = (url.searchParams.get('a') || url.searchParams.get('action') || '').toLowerCase();
     if (!ACTIONS.includes(action)) {
@@ -117,8 +185,38 @@ module.exports = function createServer(opts) {
     }
     const value = url.searchParams.get('v') !== null
       ? url.searchParams.get('v') : url.searchParams.get('value');
-    const r = dispatch(action, value);
-    sendJson(res, r.ok ? 200 : 503, r);
+    try {
+      const r = await Promise.resolve(dispatch(action, value));
+      sendJson(res, r && r.ok !== false ? 200 : 503, r || { ok: false });
+    } catch (err) {
+      sendJson(res, 503, { ok: false, error: String(err && err.message || err) });
+    }
+  }
+
+  // H1: normalise cue mirror to flat { cues, presets } arrays on the wire
+  function wireCuesPayload(raw) {
+    if (!raw) return { cues: [], presets: [] };
+    if (Array.isArray(raw)) return { cues: raw, presets: [] };
+    return {
+      cues: Array.isArray(raw.cues) ? raw.cues : [],
+      presets: Array.isArray(raw.presets) ? raw.presets : []
+    };
+  }
+
+  function decodeLogo(logo) {
+    if (!logo) return null;
+    if (logoCache.key === logo) return logoCache;
+    const m = /^data:([^;]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(logo);
+    if (!m) return null;
+    const mime = normaliseLogoMime(m[1]);
+    if (!mime) return null;
+    try {
+      const buf = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+      logoCache = { key: logo, buf, mime };
+      return logoCache;
+    } catch {
+      return null;
+    }
   }
 
   function onRequest(req, res) {
@@ -137,10 +235,17 @@ module.exports = function createServer(opts) {
     if (p === '/api/state') {
       if (!authed(url, req)) return sendJson(res, 401, { ok: false, error: 'Bad or missing token' });
       const snap = getSnapshot();
-      return sendJson(res, 200, { ok: true, state: snap.state, cues: snap.cues });
+      const c = wireCuesPayload(snap.cues);
+      return sendJson(res, 200, { ok: true, state: snap.state, cues: c.cues, presets: c.presets });
     }
 
-    if (p === '/api/health') return sendJson(res, 200, { ok: true, app: 'StageCredit' });
+    if (p === '/api/health') {
+      return sendJson(res, 200, {
+        ok: true,
+        app: 'StageCredit',
+        authFailures
+      });
+    }
 
     // Viewer pages — open, read-only.
     if (p === '/' || p === '/display') return sendPage(res, 'display.html');
@@ -163,10 +268,16 @@ module.exports = function createServer(opts) {
     if (p === '/assets/logo') {
       const snap = getSnapshot();
       const logo = snap.settings && snap.settings.logo;
-      if (!logo) return send(res, 404, 'No logo set');
-      const m = /^data:([^;]+);base64,(.*)$/.exec(logo);
-      if (!m) return send(res, 404, 'Unsupported logo');
-      return send(res, 200, Buffer.from(m[2], 'base64'), m[1]);
+      const decoded = decodeLogo(logo);
+      if (!decoded) return send(res, 404, 'No logo set');
+      // H3: locked Content-Type; versioned immutable cache for M12
+      const v = url.searchParams.get('v') || '0';
+      return send(res, 200, decoded.buf, decoded.mime, {
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Content-Security-Policy': "default-src 'none'; img-src 'self'; sandbox",
+        'Content-Disposition': 'inline',
+        'X-StageCredit-Logo-Version': String(v)
+      });
     }
 
     if (p.startsWith('/fonts/')) return sendFile(res, p);
@@ -176,22 +287,66 @@ module.exports = function createServer(opts) {
 
   // Settings sent to browsers have the logo stripped and replaced with a URL: the
   // data URL can be megabytes, and a WebSocket frame per client is not the place for
-  // it. Bumped by length so a changed logo busts the cache.
+  // it. Hash length + simple fingerprint so a changed logo busts the cache.
   function wireSettings(settings) {
     if (!settings) return null;
     const out = Object.assign({}, settings);
-    out.logo = settings.logo ? '/assets/logo?v=' + settings.logo.length : null;
+    if (settings.logo) {
+      const decoded = decodeLogo(settings.logo);
+      if (decoded) {
+        // version by mime+length so relative and absolute URL comparison normalize
+        const ver = decoded.mime + '-' + decoded.buf.length;
+        out.logo = '/assets/logo?v=' + encodeURIComponent(ver);
+      } else {
+        out.logo = null;
+      }
+    } else {
+      out.logo = null;
+    }
+    // presets are pushed with the cues channel (H1), not embedded here
     return out;
   }
 
+  // M11: latest-wins — skip send when buffer is already deep
   function fanout(obj) {
     if (!sockets.size) return;
     const msg = JSON.stringify(obj);
     sockets.forEach(ws => {
-      if (ws.readyState === 1) {
-        try { ws.send(msg); } catch (e) { /* client went away mid-send */ }
+      if (ws.readyState !== 1) return;
+      // Drop stale frames for slow clients
+      if (ws.bufferedAmount > 256 * 1024) {
+        ws._pending = msg; // keep latest; send when flush possible
+        return;
       }
+      try {
+        if (ws._pending) {
+          ws.send(ws._pending);
+          ws._pending = null;
+        }
+        ws.send(msg);
+      } catch (e) { /* client went away mid-send */ }
     });
+  }
+
+  function hostLooksLocal(hostHeader) {
+    if (!hostHeader) return false;
+    const host = String(hostHeader).split(':')[0].toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    // bare IPv4 or hostname on LAN is fine; reject empty / suspicious
+    return host.length > 0 && !/[\s\\]/.test(host);
+  }
+
+  // L3: for control WS messages, Origin if present must match Host
+  function controllerOriginOk(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true; // Companion / non-browser clients
+    try {
+      const o = new URL(origin);
+      const reqHost = (req.headers.host || '').toLowerCase();
+      return o.host.toLowerCase() === reqHost;
+    } catch {
+      return false;
+    }
   }
 
   return {
@@ -206,30 +361,41 @@ module.exports = function createServer(opts) {
           if (WebSocketServer) {
             wss = new WebSocketServer({ server: httpServer, path: '/ws' });
             wss.on('connection', (ws, req) => {
+              if (!hostLooksLocal(req.headers.host)) {
+                try { ws.close(); } catch (e) {}
+                return;
+              }
               let url;
-              try { url = new URL(req.url, 'http://localhost'); } catch (e) { url = null; }
-              ws.isController = url ? authed(url, req) : false;
+              try { url = new URL(req.url, 'http://' + (req.headers.host || 'localhost')); }
+              catch (e) { url = null; }
+              const tokenOk = url ? authed(url, req) : false;
+              const originOk = controllerOriginOk(req);
+              ws.isController = tokenOk && originOk;
               sockets.add(ws);
               ws.on('close', () => sockets.delete(ws));
               ws.on('error', () => sockets.delete(ws));
-              ws.on('message', raw => {
+              ws.on('message', async raw => {
                 let msg;
                 try { msg = JSON.parse(String(raw)); } catch (e) { return; }
                 if (msg.type === 'ping') { try { ws.send('{"type":"pong"}'); } catch (e) {} return; }
                 // Read-only viewers may not drive the show, whatever they send.
                 if (!ws.isController) return;
                 if (msg.type === 'action' && ACTIONS.includes(msg.action)) {
-                  dispatch(msg.action, msg.value);
+                  try {
+                    await Promise.resolve(dispatch(msg.action, msg.value));
+                  } catch (e) {}
                 }
               });
               // Immediate snapshot so a browser joining mid-show is correct at once.
               const snap = getSnapshot();
+              const c = wireCuesPayload(snap.cues);
               try {
                 ws.send(JSON.stringify({
                   type: 'snapshot',
                   state: snap.state,
                   settings: wireSettings(snap.settings),
-                  cues: snap.cues || [],
+                  cues: c.cues,
+                  presets: c.presets,
                   controller: ws.isController
                 }));
               } catch (e) {}
@@ -249,6 +415,7 @@ module.exports = function createServer(opts) {
       return new Promise(resolve => {
         sockets.forEach(ws => { try { ws.close(); } catch (e) {} });
         sockets.clear();
+        logoCache = { key: null, buf: null, mime: null };
         if (wss) { try { wss.close(); } catch (e) {} wss = null; }
         if (httpServer) {
           httpServer.close(() => resolve());
@@ -264,12 +431,19 @@ module.exports = function createServer(opts) {
         token,
         addresses: localAddresses(),
         clients: sockets.size,
-        live: !!WebSocketServer
+        live: !!WebSocketServer,
+        authFailures
       };
     },
 
     pushState(state) { fanout({ type: 'state', state }); },
-    pushSettings(settings) { fanout({ type: 'settings', settings: wireSettings(settings) }); },
-    pushCues(cues) { fanout({ type: 'cues', cues }); }
+    pushSettings(settings) {
+      logoCache = { key: null, buf: null, mime: null }; // bust on change
+      fanout({ type: 'settings', settings: wireSettings(settings) });
+    },
+    pushCues(raw) {
+      const c = wireCuesPayload(raw);
+      fanout({ type: 'cues', cues: c.cues, presets: c.presets });
+    }
   };
 };
