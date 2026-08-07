@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <!-- See the note in control.html. Same policy; the display also needs data: images
      for the custom logo. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <title>StageCredit — Display</title>
 <!-- Bundled locally; see the note in control-v2.html. No network, so no swap —
      which also means the message autofit measures the real font first time. -->
@@ -265,6 +265,19 @@
   const brandEl = document.getElementById('brand');
   const logoEl = document.getElementById('logoImg');
   let lastScale = null, lastFont = null;
+  let lastLogoKey = null;
+
+  // M12: normalize absolute vs relative logo URLs for comparison
+  function logoKey(url) {
+    if (!url) return '';
+    try {
+      if (url.startsWith('data:')) return url.slice(0, 64) + url.length;
+      const u = new URL(url, location.href);
+      return u.pathname + u.search;
+    } catch {
+      return url;
+    }
+  }
 
   function applySettings(s) {
     const r = document.documentElement.style;
@@ -296,10 +309,15 @@
     // paint immediately rather than waiting up to 250ms for the next tick
     if (s.todAlongside) todClockEl.textContent = fmtClock();
     if (s.logo) {
-      if (logoEl.src !== s.logo) logoEl.src = s.logo;
+      const key = logoKey(s.logo);
+      if (key !== lastLogoKey) {
+        lastLogoKey = key;
+        logoEl.src = s.logo;
+      }
       logoEl.style.display = 'block';
       brandEl.style.display = 'none';
     } else {
+      lastLogoKey = null;
       logoEl.style.display = 'none';
       brandEl.style.display = s.brand ? 'block' : 'none';
     }
@@ -350,6 +368,7 @@
   // Remembered so per-cue colour overrides can be undone without waiting for the
   // next settings push.
   let baseSettings = null;
+  let lastPaintKey = '';
   onSettingsCb = (s) => {
     if (!s) return;
     baseSettings = s;
@@ -358,6 +377,16 @@
 
   onStateCb = (state) => {
     if (!state) return;
+    // L9: skip DOM work when the painted second-resolution fields are unchanged
+    const timeKey = state.tod ? 'tod' : (state.countup ? 'up:' : 'dn:') + Math.ceil(state.remaining);
+    const paintKey = [
+      state.blackout, state.tod, state.running, state.countup, state.warning, state.danger,
+      state.cueTitle, state.cueSub, state.nextName, state.message, state.cueColor, state.cueBg,
+      timeKey, !!(flashOn && state.danger && state.remaining > -10 && state.running)
+    ].join('|');
+    if (paintKey === lastPaintKey) return;
+    lastPaintKey = paintKey;
+
     document.body.classList.toggle('blackout', !!state.blackout);
     // per-cue overrides on top of global settings
     const r = document.documentElement.style;
@@ -374,11 +403,17 @@
     // the end of the cue list and when the setting is off. The text is only written
     // when non-empty, so the name stays put while it fades out instead of vanishing
     // and leaving the "Next" label fading on its own.
-    if (state.nextName) nextUpNameEl.textContent = state.nextName;
+    if (state.nextName && nextUpNameEl.textContent !== state.nextName) {
+      nextUpNameEl.textContent = state.nextName;
+    }
     document.body.classList.toggle('hasnext', !!state.nextName);
 
-    cueTitleEl.textContent = state.cueTitle || '';
-    cueSubEl.textContent = state.cueSub || '';
+    if (cueTitleEl.textContent !== (state.cueTitle || '')) {
+      cueTitleEl.textContent = state.cueTitle || '';
+    }
+    if (cueSubEl.textContent !== (state.cueSub || '')) {
+      cueSubEl.textContent = state.cueSub || '';
+    }
     // visibility, not display — display:none would collapse the reserved band and
     // move the clock, which is the whole thing we're preventing
     cueSubEl.style.visibility = state.cueSub ? 'visible' : 'hidden';
@@ -394,8 +429,10 @@
       return;
     }
 
-    timeEl.textContent = state.countup ? fmtUp(state.remaining) : fmt(state.remaining);
-    pausedEl.style.display = (!state.running && (state.countup || state.remaining > 0)) ? 'block' : 'none';
+    const t = state.countup ? fmtUp(state.remaining) : fmt(state.remaining);
+    if (timeEl.textContent !== t) timeEl.textContent = t;
+    const pausedShow = (!state.running && (state.countup || state.remaining > 0)) ? 'block' : 'none';
+    if (pausedEl.style.display !== pausedShow) pausedEl.style.display = pausedShow;
 
     document.body.classList.toggle('warning', !!state.warning);
     document.body.classList.toggle('danger', !!state.danger);

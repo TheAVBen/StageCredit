@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#2c2b3b">
 <!-- connect-src 'self' covers the same-origin WebSocket back to the app. No remote
      origins, no eval. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <title>StageCredit — Remote</title>
 <link rel="stylesheet" href="fonts/montserrat.css">
 <style>
@@ -121,14 +121,29 @@
 
 <script>
   const $ = (id) => document.getElementById(id);
-  // Token comes in on the URL the control panel shows, then persists so the page can
-  // be reloaded or bookmarked without it.
+  // Token from the control panel URL. sessionStorage so it does not live forever (L2).
+  // Migration: if only localStorage has a token, promote once then drop permanent storage.
   const qs = new URLSearchParams(location.search);
-  let token = qs.get('t') || localStorage.getItem('scToken') || '';
-  if (qs.get('t')) localStorage.setItem('scToken', qs.get('t'));
+  let token = qs.get('t') || sessionStorage.getItem('scToken') || localStorage.getItem('scToken') || '';
+  if (qs.get('t')) {
+    sessionStorage.setItem('scToken', qs.get('t'));
+    try { localStorage.removeItem('scToken'); } catch (e) {}
+    // Strip token from the address bar after capture (history + shoulder-surfing).
+    try {
+      const u = new URL(location.href);
+      u.searchParams.delete('t');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+    } catch (e) {}
+  } else if (token) {
+    sessionStorage.setItem('scToken', token);
+    try { localStorage.removeItem('scToken'); } catch (e) {}
+  }
 
   let ws = null, retry = 500, controller = false;
   let cues = [], presets = [], st = null;
+  // H12: rebuild cue DOM only when the list content changes
+  let cuesSig = '';
+  let presetsSig = '';
 
   function setConn(text, cls) {
     $('conn').textContent = text;
@@ -140,6 +155,19 @@
     ws.send(JSON.stringify({ type: 'action', action, value }));
   }
 
+  // H1: unpack flat wire contract { cues, presets } (and tolerate legacy nested shapes)
+  function ingestCuesPayload(raw, presetsFromMsg) {
+    if (Array.isArray(raw)) {
+      cues = raw;
+    } else if (raw && Array.isArray(raw.cues)) {
+      cues = raw.cues;
+      if (Array.isArray(raw.presets)) presets = raw.presets;
+    } else {
+      cues = [];
+    }
+    if (Array.isArray(presetsFromMsg)) presets = presetsFromMsg;
+  }
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws?t=' + encodeURIComponent(token));
@@ -149,13 +177,23 @@
       if (m.type === 'snapshot') {
         controller = !!m.controller;
         if (!controller) setConn('read only', 'bad');
-        if (m.cues) cues = m.cues;
-        if (m.settings) presets = m.settings.presets || presets;
-        renderCues();
+        ingestCuesPayload(m.cues, m.presets);
+        if (m.settings && Array.isArray(m.settings.presets) && !m.presets) {
+          presets = m.settings.presets;
+        }
+        renderCues(true);
+        renderMsgs(true);
         if (m.state) paint(m.state);
       } else if (m.type === 'state') paint(m.state);
-      else if (m.type === 'cues') { cues = m.cues || []; renderCues(); }
-      else if (m.type === 'settings') { presets = (m.settings && m.settings.presets) || presets; renderMsgs(); }
+      else if (m.type === 'cues') {
+        ingestCuesPayload(m.cues, m.presets);
+        renderCues(true);
+        if (m.presets) renderMsgs(true);
+      }
+      else if (m.type === 'settings') {
+        if (m.settings && Array.isArray(m.settings.presets)) presets = m.settings.presets;
+        renderMsgs(true);
+      }
     };
     // Venue wifi drops. Back off, and say so rather than looking live while stale.
     ws.onclose = () => { setConn('reconnecting', 'bad'); setTimeout(connect, retry); retry = Math.min(retry * 2, 8000); };
@@ -200,32 +238,82 @@
 
     $('onair').className = state.message ? 'onair show' : 'onair';
     $('onair').textContent = state.message ? 'ON SCREEN: ' + state.message : '';
-    renderCues();
+    // H12: patch active classes only — full rebuild happens when cues change
+    patchActiveCue(state.cueIndex);
+    patchMsgActive(state.message);
     document.querySelectorAll('button').forEach(b => { if (b.id !== 'go') b.disabled = !controller; });
     $('go').disabled = !n || !controller;
   }
 
-  function renderCues() {
+  function patchActiveCue(idx) {
+    const rows = $('cues').children;
+    for (let i = 0; i < rows.length; i++) {
+      const el = rows[i];
+      if (!el.classList || !el.classList.contains('cue')) continue;
+      el.classList.toggle('active', idx === i);
+    }
+  }
+
+  function patchMsgActive(msg) {
+    const chips = $('msgs').children;
+    for (let i = 0; i < chips.length; i++) {
+      const el = chips[i];
+      if (el.tagName !== 'BUTTON') continue;
+      el.classList.toggle('on', msg && el.textContent === msg);
+    }
+  }
+
+  function cueListSig() {
+    return cues.map(c => (c.name || '') + '|' + (c.type || '') + '|' + (c.seconds || 0)).join('\n');
+  }
+
+  function renderCues(force) {
+    const sig = cueListSig();
+    if (!force && sig === cuesSig) {
+      if (st) patchActiveCue(st.cueIndex);
+      return;
+    }
+    cuesSig = sig;
     const box = $('cues');
-    if (!cues.length) { box.innerHTML = '<div class="empty">No cues</div>'; return; }
-    box.innerHTML = '';
+    if (!cues.length) {
+      box.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No cues';
+      box.appendChild(empty);
+      return;
+    }
+    box.textContent = '';
     cues.forEach((c, i) => {
       const d = document.createElement('div');
       d.className = 'cue' + (st && st.cueIndex === i ? ' active' : '');
-      d.innerHTML = '<span class="i"></span><span class="n"></span><span class="d"></span>';
-      d.querySelector('.i').textContent = i + 1;
-      d.querySelector('.n').textContent = c.name;
-      d.querySelector('.d').textContent = c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      const si = document.createElement('span'); si.className = 'i'; si.textContent = String(i + 1);
+      const sn = document.createElement('span'); sn.className = 'n'; sn.textContent = c.name;
+      const sd = document.createElement('span'); sd.className = 'd';
+      sd.textContent = c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      d.append(si, sn, sd);
       // 1-based to match the cue numbers on screen and the documented API
       d.addEventListener('click', () => { if (controller) send('cue', String(i + 1)); });
       box.appendChild(d);
     });
   }
 
-  function renderMsgs() {
+  function renderMsgs(force) {
+    const sig = presets.join('\0');
+    if (!force && sig === presetsSig) {
+      if (st) patchMsgActive(st.message);
+      return;
+    }
+    presetsSig = sig;
     const box = $('msgs');
-    box.innerHTML = '';
-    if (!presets.length) { box.innerHTML = '<div class="empty">No presets</div>'; return; }
+    box.textContent = '';
+    if (!presets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No presets';
+      box.appendChild(empty);
+      return;
+    }
     presets.forEach((text, i) => {
       const b = document.createElement('button');
       b.className = 'chip' + (st && st.message === text ? ' on' : '');

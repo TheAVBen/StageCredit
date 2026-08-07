@@ -7,7 +7,7 @@
      style attributes. It deliberately does not grant unsafe-eval, which is what the
      Electron security warning was actually about. img-src allows data: for the custom
      logo, stored as a base64 data URL in localStorage. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <title>StageCredit — Control</title>
 <!-- Boot overlay styles come FIRST and are self-contained: no webfont, no external
      file, nothing that could itself be the thing we're waiting on. The overlay is
@@ -466,6 +466,8 @@
      to mis-hit next to Load and nothing to mis-hit inside a message chip. */
   body.locked .cue .edit,
   body.locked .cue .del,
+  body.locked .cue .load,
+  body.locked .cue .clear-on,
   body.locked .chip .x,
   body.locked #reorderBtn,
   body.locked .setuprow { display: none; }
@@ -891,7 +893,7 @@
           <option value="br">Bottom right</option>
         </select>
       </div>
-      <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchMode"></div>
+      <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchModeDisplay" class="touchModeCb"></div>
       <div class="crow"><label>Show "next up" on the display</label><input type="checkbox" id="setShowNext"></div>
       <div class="crow" id="nextAtRow">
         <label>&nbsp;&nbsp;↳ appears when this much is left</label>
@@ -939,7 +941,7 @@
         <div class="hint2">Starts every session unlocked. With this on, your first GO locks the cue list and message
           presets against editing &mdash; unlock from the top bar when you need to change something.</div>
         <hr>
-        <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchMode"></div>
+        <div class="crow"><label>Touch-friendly mode (this panel)</label><input type="checkbox" id="touchModeBehaviour" class="touchModeCb"></div>
         <div class="hint2">Enlarges every hit target for touchscreen or tablet operation.</div>
       </div>
 
@@ -1016,7 +1018,8 @@
   // Read here rather than beside applySimple(): paintSchedule() and the
   // scheduled-start interval both read it, and they run earlier in the file.
   let simpleMode = localStorage.getItem('simpleMode') === '1';
-  // Cue armed by a digit key, awaiting GO. null = follow the natural next cue.
+  // Cue armed by a digit key, awaiting GO. Stored as the cue object (H8), not a raw
+  // index, so reorder/delete/import cannot silently retarget arming.
   let armedCue = null;
 
   // Normalise cues (upgrades older saved formats)
@@ -1067,8 +1070,32 @@
   };
   let settings = Object.assign({}, defaultSettings,
     JSON.parse(localStorage.getItem('displaySettings') || '{}'));
+  if (settings.logo) settings.logo = sanitiseLogo(settings.logo);
 
   function saveSettings() { localStorage.setItem('displaySettings', JSON.stringify(settings)); }
+
+  // H3: only raster image data URLs — SVG/html would be same-origin-scriptable on LAN logo.
+  function isValidLogoDataUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const m = /^data:([^;,]+)/i.exec(url);
+    if (!m) return false;
+    let mime = m[1].trim().toLowerCase();
+    if (mime === 'image/jpg') mime = 'image/jpeg';
+    return mime === 'image/png' || mime === 'image/jpeg'
+      || mime === 'image/webp' || mime === 'image/gif';
+  }
+  function sanitiseLogo(url) {
+    return isValidLogoDataUrl(url) ? url : null;
+  }
+
+  // H8: resolve armed cue object → current index
+  function armedIndex() {
+    if (!armedCue) return null;
+    const i = cues.indexOf(armedCue);
+    if (i < 0) { armedCue = null; return null; }
+    return i;
+  }
+  function clearArm() { armedCue = null; }
 
   function fmt(s) {
     const neg = s < 0;
@@ -1264,13 +1291,14 @@
     $('progressFill').style.width = pct + '%';
 
     // An armed cue (set by a digit key) overrides the natural next.
+    const armIdx = armedIndex();
     const autoIdx = activeCue >= 0 ? activeCue + 1 : (cues.length ? 0 : -1);
-    const nextIdx = (armedCue != null && cues[armedCue]) ? armedCue : autoIdx;
+    const nextIdx = (armIdx != null && cues[armIdx]) ? armIdx : autoIdx;
     const next = nextIdx >= 0 ? cues[nextIdx] : null;
     const nv = $('nextVal');
     if (next) {
-      nv.className = 'val' + (armedCue != null ? ' armed' : '');
-      setText('nextVal', (armedCue != null ? 'ARMED  ' : '') + (nextIdx + 1) + '. ' + next.name + ' — '
+      nv.className = 'val' + (armIdx != null ? ' armed' : '');
+      setText('nextVal', (armIdx != null ? 'ARMED  ' : '') + (nextIdx + 1) + '. ' + next.name + ' — '
         + (next.type === 'tod' ? 'TOD' : next.type === 'countup' ? 'Count up' : fmt(next.seconds)));
       $('goBtn').disabled = false;
       $('goBtn').dataset.idx = String(nextIdx);
@@ -1333,15 +1361,27 @@
     };
   }
 
-  // Settings travel separately, only on change. pushSettings is called from
-  // settingChanged() and once at startup.
-  function pushSettings() { window.timerAPI.sendSettings(settings); }
+  // Settings travel separately, only on change. Debounced so slider/color churn
+  // does not reserialize a multi-MB logo over IPC every input event (H11).
+  let settingsPushTimer = null;
+  function pushSettings() {
+    if (settingsPushTimer) { clearTimeout(settingsPushTimer); settingsPushTimer = null; }
+    window.timerAPI.sendSettings(settings);
+  }
+  function pushSettingsSoon() {
+    if (settingsPushTimer) clearTimeout(settingsPushTimer);
+    settingsPushTimer = setTimeout(() => {
+      settingsPushTimer = null;
+      window.timerAPI.sendSettings(settings);
+    }, 180);
+  }
 
   // 10Hz is ample: the displayed clock is M:SS, so it can only change once a second,
   // and warning/overtime are CSS classes. The control panel's own preview still
-  // repaints every frame below — only the wire is throttled.
+  // repaints — local preview paths are memoised (M13).
   const PUSH_MS = 100;
   let lastPush = 0;
+  const prevLocal = {};
 
   function broadcast(force) {
     const state = buildState();
@@ -1353,20 +1393,49 @@
       window.timerAPI.sendUpdate(state);
     }
 
-    $('previewTime').textContent = todMode ? fmtClock() : countUp ? fmtUp(remaining) : fmt(remaining);
-    $('cueName').textContent = cue ? (cue.name + (cue.subtitle ? ' — ' + cue.subtitle : '')) : '';
-    const pv = $('preview');
-    pv.style.background = state.cueBg || settings.bg;
-    pv.style.fontFamily = settings.font;
-    $('previewTime').style.color = state.danger ? settings.dangerC
+    const timeStr = todMode ? fmtClock() : countUp ? fmtUp(remaining) : fmt(remaining);
+    if (prevLocal.time !== timeStr) {
+      prevLocal.time = timeStr;
+      $('previewTime').textContent = timeStr;
+    }
+    const cueLabel = cue ? (cue.name + (cue.subtitle ? ' — ' + cue.subtitle : '')) : '';
+    if (prevLocal.cueLabel !== cueLabel) {
+      prevLocal.cueLabel = cueLabel;
+      $('cueName').textContent = cueLabel;
+    }
+    const bg = state.cueBg || settings.bg;
+    if (prevLocal.bg !== bg) {
+      prevLocal.bg = bg;
+      $('preview').style.background = bg;
+    }
+    if (prevLocal.font !== settings.font) {
+      prevLocal.font = settings.font;
+      $('preview').style.fontFamily = settings.font;
+    }
+    const timeColor = state.danger ? settings.dangerC
       : state.warning ? settings.warnC : (state.cueColor || settings.timerC);
+    if (prevLocal.timeColor !== timeColor) {
+      prevLocal.timeColor = timeColor;
+      $('previewTime').style.color = timeColor;
+    }
     const notes = cue && cue.notes;
-    $('cueNotes').style.display = notes ? 'block' : 'none';
-    $('cueNotes').textContent = notes || '';
+    if (prevLocal.notes !== notes) {
+      prevLocal.notes = notes;
+      $('cueNotes').style.display = notes ? 'block' : 'none';
+      $('cueNotes').textContent = notes || '';
+    }
     // label lives in its own span so the key hint isn't wiped each frame
-    $('startLabel').textContent = running ? 'Pause' : 'Start';
-    $('startBtn').className = running ? 'pause' : 'start';
-    $('todBtn').className = todMode ? 'send' : 'quick';
+    const startLab = running ? 'Pause' : 'Start';
+    if (prevLocal.startLab !== startLab) {
+      prevLocal.startLab = startLab;
+      $('startLabel').textContent = startLab;
+      $('startBtn').className = running ? 'pause' : 'start';
+    }
+    const todCls = todMode ? 'send' : 'quick';
+    if (prevLocal.todCls !== todCls) {
+      prevLocal.todCls = todCls;
+      $('todBtn').className = todCls;
+    }
     renderStatus();
   }
 
@@ -1413,14 +1482,17 @@
   }
 
   function tick(now) {
-    if (running) {
-      const delta = ((now - lastTick) / 1000) * speed;
+    // H9: never advance remaining while TOD is on (even if running was set remotely).
+    if (running && !todMode) {
+      // C1: clamp delta so a backgrounded control cannot jump the clock by the full gap.
+      const raw = (now - lastTick) / 1000;
+      const delta = Math.min(0.25, Math.max(0, raw)) * speed;
       lastTick = now;
       const prev = remaining;
       remaining += countUp ? delta : -delta;
       const cue = activeCue >= 0 ? cues[activeCue] : null;
 
-      if (!countUp && !todMode) {
+      if (!countUp) {
         // Auto message when crossing the cue's trigger point.
         // The trigger is clamped to the cue's own length: a 30s cue carrying the
         // default 120s trigger starts already past it, so a plain "crossed from
@@ -1455,6 +1527,10 @@
           }
         }
       }
+      broadcast();
+    } else if (todMode) {
+      // Local wall-clock preview only (throttled via broadcast's 10Hz / memoised fields).
+      lastTick = now;
       broadcast();
     }
     requestAnimationFrame(tick);
@@ -1620,6 +1696,7 @@
     const [moved] = cues.splice(from, 1);
     cues.splice(to, 0, moved);
     activeCue = activeObj ? cues.indexOf(activeObj) : -1;
+    // armedCue is object identity — index follows automatically via armedIndex()
     saveCues();
     renderCues();
     broadcast();
@@ -1689,17 +1766,23 @@
           moveCue(dragIndex, i);
         });
       } else {
+        // H6: under show lock, no edit/load/delete affordances (also CSS-hidden).
+        if (!showLock) {
         const edit = document.createElement('button');
         edit.className = 'edit';
         edit.textContent = '✎';
         edit.title = 'Edit cue';
-        edit.addEventListener('click', () => openCueEditor(i));
+        edit.addEventListener('click', () => {
+          if (showLock) return;
+          openCueEditor(i);
+        });
         row.append(edit);
         const load = document.createElement('button');
         const isActive = i === activeCue;
         load.className = isActive ? 'clear-on' : 'load';
         load.textContent = isActive ? 'Clear' : 'Load';
-        load.addEventListener('click', () => {
+        load.addEventListener('click', async () => {
+          if (showLock) return;
           if (isActive) {           // unload cue, back to manual time
             running = false;
             activeCue = -1;
@@ -1713,6 +1796,13 @@
             renderCues();
             broadcast();
           } else {
+            // M3: confirm Load while the clock is running — Load stops and replaces it.
+            if (running) {
+              const yes = await ask('Load this cue now?',
+                'The clock is running. Loading "' + cue.name + '" will stop it and put this cue on the display.',
+                'Load', true);
+              if (!yes) return;
+            }
             loadCue(i, false);
           }
         });
@@ -1721,6 +1811,7 @@
         del.textContent = '✕';
         del.title = 'Delete cue';
         del.addEventListener('click', () => {
+          if (showLock) return;
           // Deleting the cue that's driving a live clock is worth a beat's pause.
           // Every delete asks now, not just the running one — deleting the NEXT cue
           // mid-show is just as disruptive and used to go through silently.
@@ -1730,7 +1821,9 @@
               'Delete', true).then(yes => {
             if (!yes) return;
             pushUndo('delete cue');
+            const removed = cues[i];
             cues.splice(i, 1);
+            if (armedCue === removed) clearArm();
             if (activeCue === i) {
               activeCue = -1;
               // Its mode went with it. Leaving these set stranded the output in
@@ -1742,13 +1835,13 @@
               closeCueRun();
               syncInputsFromRemaining();   // panel and output must agree
             } else if (activeCue > i) activeCue--;
-            if (armedCue != null && armedCue >= cues.length) armedCue = null;
             saveCues();
             renderCues();
             broadcast(true);
           });
         });
         row.append(load, del);
+        }
       }
       list.appendChild(row);
     });
@@ -1795,6 +1888,8 @@
 
   // ---- Transport ----
   $('startBtn').addEventListener('click', () => {
+    // H9: no-op start/toggle while time-of-day is showing
+    if (todMode) return;
     running = !running;
     lastTick = performance.now();
     logRun(running ? 'start' : 'pause');
@@ -1826,7 +1921,7 @@
   $('goBtn').addEventListener('click', () => {
     const idx = parseInt($('goBtn').dataset.idx, 10);
     if (isNaN(idx)) return;
-    armedCue = null;
+    clearArm();
     loadCue(idx, true);
     // Opt-in: the first GO can close the rundown against accidental edits.
     if (lockOnGo && !showLock) applyLock(true);
@@ -1920,6 +2015,7 @@
   }
 
   function openCueEditor(i) {
+    if (showLock) return;
     editingIndex = i;
     const cue = cues[i];
     $('ceName').value = cue.name;
@@ -2411,31 +2507,63 @@
     $('csvAppendBtn').disabled = !csvStaged;
     $('csvReplaceBtn').disabled = !csvStaged;
 
-    const bits = [];
-    bits.push('<b>' + res.cues.length + '</b> cue' + (res.cues.length === 1 ? '' : 's') + ' ready');
-    if (res.errors.length) bits.push('<b>' + res.errors.length + '</b> row' + (res.errors.length === 1 ? '' : 's') + ' skipped');
-    if (res.unknown.length) bits.push('ignored unknown column' + (res.unknown.length === 1 ? '' : 's') + ': ' + res.unknown.join(', '));
+    // H2: build summary with DOM + textContent — never concatenate untrusted headers into HTML
+    const sum = $('csvSummary');
+    sum.textContent = '';
+    const frag = document.createDocumentFragment();
+    function appendLabel(text) {
+      frag.appendChild(document.createTextNode(text));
+    }
+    function appendBold(n) {
+      const b = document.createElement('b');
+      b.textContent = String(n);
+      frag.appendChild(b);
+    }
+    appendBold(res.cues.length);
+    appendLabel(' cue' + (res.cues.length === 1 ? '' : 's') + ' ready');
+    if (res.errors.length) {
+      appendLabel(' · ');
+      appendBold(res.errors.length);
+      appendLabel(' row' + (res.errors.length === 1 ? '' : 's') + ' skipped');
+    }
+    if (res.unknown.length) {
+      appendLabel(' · ignored unknown column' + (res.unknown.length === 1 ? '' : 's') + ': ');
+      appendLabel(res.unknown.join(', '));
+    }
     const total = res.cues.reduce((a, c) => a + cueDuration(c), 0);
-    if (total) bits.push('total running time <b>' + fmtDur(total) + '</b>');
-    $('csvSummary').innerHTML = bits.join(' · ');
+    if (total) {
+      appendLabel(' · total running time ');
+      appendBold(fmtDur(total));
+    }
+    sum.appendChild(frag);
 
     const box = $('csvPreview');
     box.innerHTML = '';
     res.errors.forEach(e => {
       const d = document.createElement('div');
       d.className = 'csvrow bad';
-      d.innerHTML = '<span class="n">' + (e.line || '-') + '</span><span class="err"></span>';
-      d.querySelector('.err').textContent = e.msg;
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = String(e.line || '-');
+      const err = document.createElement('span');
+      err.className = 'err';
+      err.textContent = e.msg;
+      d.append(n, err);
       box.appendChild(d);
     });
     res.cues.forEach((c, i) => {
       const d = document.createElement('div');
       d.className = 'csvrow';
-      d.innerHTML = '<span class="n"></span><span class="nm"></span><span class="dt"></span>';
-      d.querySelector('.n').textContent = i + 1;
-      d.querySelector('.nm').textContent = c.name + (c.subtitle ? ' — ' + c.subtitle : '');
-      d.querySelector('.dt').textContent =
-        c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = String(i + 1);
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = c.name + (c.subtitle ? ' — ' + c.subtitle : '');
+      const dt = document.createElement('span');
+      dt.className = 'dt';
+      dt.textContent = c.type === 'tod' ? 'TOD' : c.type === 'countup' ? 'UP' : fmt(c.seconds);
+      d.append(n, nm, dt);
       box.appendChild(d);
     });
   }
@@ -2487,6 +2615,7 @@
     if (replace) {
       cues = csvStaged.slice();
       activeCue = -1;                 // the cue that was loaded may no longer exist
+      clearArm();                     // H8: list identity washed out
     } else {
       cues = cues.concat(csvStaged);
     }
@@ -2502,29 +2631,37 @@
   // Native confirm()/alert() block the JS thread, which stalls broadcast() — the
   // presenter's display sits on a stale number until the operator dismisses the box.
   // These are promise-based and let the clock keep ticking underneath.
+  // M5: queue dialogs so a second ask/say never overwrites an in-flight resolve.
   let askResolve = null;
-  function ask(title, body, okLabel, danger) {
-    $('askTitle').textContent = title;
-    $('askBody').textContent = body;
-    $('askOk').textContent = okLabel || 'OK';
-    $('askOk').className = danger ? 'clear-on' : 'send';
-    $('askCancel').style.display = '';
+  const askQueue = [];
+  function pumpAsk() {
+    if (askResolve || !askQueue.length) return;
+    const job = askQueue.shift();
+    $('askTitle').textContent = job.title;
+    $('askBody').textContent = job.body;
+    $('askOk').textContent = job.okLabel || 'OK';
+    $('askOk').className = job.danger ? 'clear-on' : 'send';
+    $('askCancel').style.display = job.hideCancel ? 'none' : '';
     $('askModal').classList.add('open');
-    return new Promise(res => { askResolve = res; });
+    askResolve = job.resolve;
+  }
+  function ask(title, body, okLabel, danger) {
+    return new Promise(res => {
+      askQueue.push({ title, body, okLabel, danger: !!danger, hideCancel: false, resolve: res });
+      pumpAsk();
+    });
   }
   function say(title, body) {
-    $('askTitle').textContent = title;
-    $('askBody').textContent = body;
-    $('askOk').textContent = 'Close';
-    $('askOk').className = 'send';
-    $('askCancel').style.display = 'none';
-    $('askModal').classList.add('open');
-    return new Promise(res => { askResolve = res; });
+    return new Promise(res => {
+      askQueue.push({ title, body, okLabel: 'Close', danger: false, hideCancel: true, resolve: res });
+      pumpAsk();
+    });
   }
   function closeAsk(v) {
     $('askModal').classList.remove('open');
     const r = askResolve; askResolve = null;
     if (r) r(v);
+    pumpAsk();
   }
   $('askOk').addEventListener('click', () => closeAsk(true));
   $('askCancel').addEventListener('click', () => closeAsk(false));
@@ -2633,63 +2770,123 @@
   }
 
   $('netBtn').addEventListener('click', async () => {
-    if (netInfo && netInfo.running) {
-      await window.timerAPI.serverStop();
-      netInfo = { running: false };
+    const btn = $('netBtn');
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    try {
+      if (netInfo && netInfo.running) {
+        await window.timerAPI.serverStop();
+        netInfo = { running: false };
+        renderNet();
+        return;
+      }
+      const port = parseInt($('netPort').value, 10) || 8080;
+      const res = await window.timerAPI.serverStart({ port });
+      if (!res.ok) { await say('Could not start the server', res.error); return; }
+      netInfo = Object.assign({ running: true, clients: 0 }, res);
       renderNet();
-      return;
+      pushSettings();
+      pushCues();
+      broadcast(true);
+    } finally {
+      btn.dataset.busy = '0';
+      btn.disabled = false;
+      renderNet();
     }
-    const port = parseInt($('netPort').value, 10) || 8080;
-    const res = await window.timerAPI.serverStart({ port });
-    if (!res.ok) { say('Could not start the server', res.error); return; }
-    netInfo = Object.assign({ running: true, clients: 0 }, res);
-    renderNet();
-    pushSettings();
-    pushCues();
-    broadcast(true);
   });
 
   // ---- Remote commands ----
   // Everything arrives here from the LAN and is performed through the same paths the
   // buttons use, so there is exactly one implementation of each action.
-  window.timerAPI.onRemoteAction(({ action, value }) => {
+  // M7: report applied/ignored back to Companion via remote-action-result.
+  window.timerAPI.onRemoteAction(({ action, value, id }) => {
+    let applied = false;
     const n = parseInt(value, 10);
-    switch (action) {
-      case 'toggle': $('startBtn').click(); break;
-      case 'start': if (!running) $('startBtn').click(); break;
-      case 'pause': if (running) $('startBtn').click(); break;
-      case 'reset': $('resetBtn').click(); break;
-      case 'tod': $('todBtn').click(); break;
-      // Straight to setBlackout, NOT through the button: blanking is a press-and-hold
-      // gesture locally (guarding against a slip on the desk), and that button has no
-      // click handler to fire. A remote command is already deliberate, so it acts at once.
-      case 'blank': setBlackout(!blackout); break;
-      case 'blankon': if (!blackout) setBlackout(true); break;
-      case 'blankoff': if (blackout) setBlackout(false); break;
-      case 'go':
-      case 'next': {
-        const t = activeCue >= 0 ? activeCue + 1 : 0;
-        if (cues[t]) loadCue(t, action === 'go');
-        break;
+    try {
+      switch (action) {
+        case 'toggle':
+          if (!todMode) { $('startBtn').click(); applied = true; }
+          break;
+        case 'start':
+          if (!todMode && !running) { $('startBtn').click(); applied = true; }
+          break;
+        case 'pause':
+          if (running) { $('startBtn').click(); applied = true; }
+          break;
+        case 'reset':
+          $('resetBtn').click(); applied = true; break;
+        case 'tod':
+          $('todBtn').click(); applied = true; break;
+        // Straight to setBlackout, NOT through the button: blanking is a press-and-hold
+        // gesture locally (guarding against a slip on the desk), and that button has no
+        // click handler to fire. A remote command is already deliberate, so it acts at once.
+        case 'blank':
+          setBlackout(!blackout); applied = true; break;
+        case 'blankon':
+          if (!blackout) { setBlackout(true); applied = true; }
+          break;
+        case 'blankoff':
+          if (blackout) { setBlackout(false); applied = true; }
+          break;
+        // H7: remote GO matches desk — use armed cue when set
+        case 'go': {
+          const armIdx = armedIndex();
+          if (armIdx != null && cues[armIdx]) {
+            clearArm();
+            loadCue(armIdx, true);
+            if (lockOnGo && !showLock) applyLock(true);
+            applied = true;
+          } else {
+            const t = activeCue >= 0 ? activeCue + 1 : 0;
+            if (cues[t]) { loadCue(t, true); applied = true; }
+          }
+          break;
+        }
+        case 'next': {
+          const t = activeCue >= 0 ? activeCue + 1 : 0;
+          if (cues[t]) { loadCue(t, false); applied = true; }
+          break;
+        }
+        case 'prev': {
+          const t = activeCue > 0 ? activeCue - 1 : -1;
+          if (t >= 0) { loadCue(t, false); applied = true; }
+          break;
+        }
+        // 1-based, matching the numbers printed down the cue list, the digit keys and
+        // every label in the app. The remote page sends 1-based too. It used to be a
+        // raw array index, so a Companion button written against the visible cue
+        // numbers loaded the cue after the one you meant.
+        case 'cue':
+          if (!isNaN(n) && cues[n - 1]) { loadCue(n - 1, false); applied = true; }
+          break;
+        case 'add':
+          if (!isNaN(n) && !todMode) { remaining += n; broadcast(true); applied = true; }
+          break;
+        case 'set':
+          if (!isNaN(n) && activeCue < 0 && !todMode) {
+            remaining = Math.max(0, n); broadcast(true); applied = true;
+          }
+          break;
+        // 1-based for the same reason as 'cue' — one counting convention across the API
+        case 'preset':
+          if (!isNaN(n) && presets[n - 1]) { setMessage(presets[n - 1], n - 1); applied = true; }
+          break;
+        case 'message':
+          setMessage(String(value || ''), 'custom'); applied = true; break;
+        case 'clearmessage':
+          message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); broadcast(true);
+          applied = true;
+          break;
       }
-      case 'prev': {
-        const t = activeCue > 0 ? activeCue - 1 : -1;
-        if (t >= 0) loadCue(t, false);
-        break;
+    } catch (err) {
+      if (id != null && window.timerAPI.remoteActionResult) {
+        window.timerAPI.remoteActionResult({ id, applied: false, error: String(err) });
       }
-      // 1-based, matching the numbers printed down the cue list, the digit keys and
-      // every label in the app. The remote page sends 1-based too. It used to be a
-      // raw array index, so a Companion button written against the visible cue
-      // numbers loaded the cue after the one you meant.
-      case 'cue': if (!isNaN(n) && cues[n - 1]) loadCue(n - 1, false); break;
-      case 'add': if (!isNaN(n)) { remaining += n; broadcast(true); } break;
-      case 'set': if (!isNaN(n) && activeCue < 0) { remaining = Math.max(0, n); broadcast(true); } break;
-      // 1-based for the same reason as 'cue' — one counting convention across the API
-      case 'preset': if (!isNaN(n) && presets[n - 1]) setMessage(presets[n - 1], n - 1); break;
-      case 'message': setMessage(String(value || ''), 'custom'); break;
-      case 'clearmessage':
-        message = ''; msgSource = null; renderMsgs(); updateCustomBtn(); broadcast(true);
-        break;
+      return;
+    }
+    if (id != null && window.timerAPI.remoteActionResult) {
+      window.timerAPI.remoteActionResult({ id, applied });
     }
   });
 
@@ -2786,9 +2983,11 @@
   function applyTouch(on) {
     document.body.classList.toggle('touch', on);
     localStorage.setItem('touchMode', on ? '1' : '0');
-    $('touchMode').checked = on;
+    document.querySelectorAll('.touchModeCb').forEach(el => { el.checked = on; });
   }
-  $('touchMode').addEventListener('change', () => applyTouch($('touchMode').checked));
+  document.querySelectorAll('.touchModeCb').forEach(el => {
+    el.addEventListener('change', () => applyTouch(el.checked));
+  });
   applyTouch(localStorage.getItem('touchMode') === '1');
 
   // ---- Customise panel ----
@@ -2820,10 +3019,15 @@
     if (settings.logo) $('logoThumb').src = settings.logo;
   }
 
-  function settingChanged() { saveSettings(); pushSettings(); broadcast(true); }
+  function settingChanged(immediate) {
+    saveSettings();
+    if (immediate) pushSettings();
+    else pushSettingsSoon();
+    broadcast(true);
+  }
 
 
-  $('setFont').addEventListener('change', () => { settings.font = $('setFont').value; settingChanged(); });
+  $('setFont').addEventListener('change', () => { settings.font = $('setFont').value; settingChanged(true); });
   $('setScale').addEventListener('input', () => {
     settings.scale = parseFloat($('setScale').value);
     $('setScaleVal').textContent = Math.round(settings.scale * 100) + '%';
@@ -2832,13 +3036,14 @@
   [['setBg','bg'],['setTimerC','timerC'],['setMsgC','msgC'],['setWarnC','warnC'],['setDangerC','dangerC']]
     .forEach(([id, key]) => {
       $(id).addEventListener('input', () => { settings[key] = $(id).value; settingChanged(); });
+      $(id).addEventListener('change', () => settingChanged(true));
     });
   $('setWarnAt').addEventListener('change', () => {
     settings.warnAt = Math.max(0, parseInt($('setWarnAt').value, 10) || 0);
-    settingChanged();
+    settingChanged(true);
   });
-  $('setFlash').addEventListener('change', () => { settings.flash = $('setFlash').checked; settingChanged(); });
-  $('set24h').addEventListener('change', () => { settings.clock24 = $('set24h').checked; settingChanged(); });
+  $('setFlash').addEventListener('change', () => { settings.flash = $('setFlash').checked; settingChanged(true); });
+  $('set24h').addEventListener('change', () => { settings.clock24 = $('set24h').checked; settingChanged(true); });
   // No point offering a size for something that isn't on screen — grey the row out
   // rather than hide it, so it's discoverable before you enable the clock.
   function syncTodScaleRow() {
@@ -2851,15 +3056,15 @@
   $('setTodAlongside').addEventListener('change', () => {
     settings.todAlongside = $('setTodAlongside').checked;
     syncTodScaleRow();
-    settingChanged();
+    settingChanged(true);
   });
   $('setTodPos').addEventListener('change', () => {
     settings.todPos = $('setTodPos').value;
-    settingChanged();
+    settingChanged(true);
   });
   $('setNextPos').addEventListener('change', () => {
     settings.nextPos = $('setNextPos').value;
-    settingChanged();
+    settingChanged(true);
   });
   $('setNextScale').addEventListener('input', () => {
     settings.nextScale = parseFloat($('setNextScale').value);
@@ -2884,7 +3089,7 @@
   $('setShowNext').addEventListener('change', () => {
     settings.showNext = $('setShowNext').checked;
     syncNextAtRow();
-    settingChanged();
+    settingChanged(true);
   });
   // Accepts mm:ss (or h:mm:ss, or bare seconds) via the same parser the CSV import
   // uses. Blank means the whole cue. Unreadable input reverts rather than silently
@@ -2903,20 +3108,31 @@
       $('setNextAt').value = fmt(secs);
     }
     syncNextAtRow();
-    settingChanged();
+    settingChanged(true);
   });
-  $('setBrand').addEventListener('change', () => { settings.brand = $('setBrand').checked; settingChanged(); });
+  $('setBrand').addEventListener('change', () => { settings.brand = $('setBrand').checked; settingChanged(true); });
 
   $('logoPickBtn').addEventListener('click', () => $('setLogo').click());
   $('setLogo').addEventListener('change', () => {
     const file = $('setLogo').files[0];
     if (!file) return;
     if (file.size > 3 * 1024 * 1024) { say('Logo too large', 'Keep the logo under 3 MB.'); return; }
+    // H3: allow-list raster types at pick time
+    const okType = /^(image\/(png|jpeg|jpg|webp|gif))$/i.test(file.type);
+    if (!okType) {
+      say('Unsupported logo type', 'Use PNG, JPEG, WebP or GIF (not SVG).');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
-      settings.logo = reader.result;
+      const data = sanitiseLogo(reader.result);
+      if (!data) {
+        say('Unsupported logo type', 'That file could not be stored as a safe image.');
+        return;
+      }
+      settings.logo = data;
       populateSettingsForm();
-      settingChanged();
+      settingChanged(true);
     };
     reader.readAsDataURL(file);
   });
@@ -2924,13 +3140,13 @@
     settings.logo = null;
     $('setLogo').value = '';
     populateSettingsForm();
-    settingChanged();
+    settingChanged(true);
   });
 
   $('setDefaultsBtn').addEventListener('click', () => {
     settings = Object.assign({}, defaultSettings);
     populateSettingsForm();
-    settingChanged();
+    settingChanged(true);
   });
 
   // ---- Keyboard shortcuts (editable) ----
@@ -3027,6 +3243,19 @@
       undo();
       return;
     }
+    // M2: intercept reload while the clock is running — reloading drops in-memory state.
+    if ((e.metaKey || e.ctrlKey) && e.code === 'KeyR') {
+      if (running) {
+        e.preventDefault();
+        e.stopPropagation();
+        ask('Reload control?',
+          'The clock is running. Reloading clears the live timer state.',
+          'Reload', true).then(yes => {
+          if (yes) location.reload();
+        });
+      }
+      return;
+    }
     if (e.code === 'Escape' && $('speedRow').classList.contains('armed')) {
       e.preventDefault();
       armSpeed(false);
@@ -3037,6 +3266,17 @@
     if (e.code === 'Escape' && schedPopOpen()) {
       e.preventDefault();
       closeSchedPop();
+      return;
+    }
+    // M4: Escape disarms an accidentally armed cue
+    if (e.code === 'Escape' && armedIndex() != null) {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if ($('settingsModal').classList.contains('open') || $('cueModal').classList.contains('open')
+          || $('askModal').classList.contains('open') || $('importModal').classList.contains('open')) return;
+      e.preventDefault();
+      clearArm();
+      renderStatus();
+      renderCues();
       return;
     }
     if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return;
@@ -3058,14 +3298,14 @@
     // used to stop a live clock and replace the number on the presenter's screen.
     // Arming is inert — nothing reaches the output until GO.
     // Checked after the keymap so a digit deliberately rebound to an action still wins.
-    if (!simpleMode) {
+    if (!simpleMode && !showLock) {
       const m = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
       if (m) {
         const n = parseInt(m[1], 10);
         const target = n === 0 ? 9 : n - 1;
         if (cues[target]) {
           e.preventDefault();
-          armedCue = target;
+          armedCue = cues[target];
           renderStatus();
           renderCues();
         }
@@ -3106,38 +3346,50 @@
   }
 
   function applyShow(data) {
-    running = false;
-    activeCue = -1;
-    todMode = false;
-    countUp = false;
-    blackout = false;
-    armedCue = null;
-    message = '';
-    msgSource = null;
-    cues = (data.cues || []).map(normaliseCue);
-    presets = Array.isArray(data.presets) ? data.presets.filter(p => p && p.trim()) : defaultPresets.slice();
-    settings = Object.assign({}, defaultSettings, data.settings || {});
-    keymap = Object.assign({}, defaultKeymap, data.keymap || {});
-    // Absent in a file means "no plan", not "keep the last one" — otherwise New Show
-    // and older show files would quietly leave a stale schedule driving drift.
-    plannedStart = data.plannedStart || '';
-    hardOut = data.hardOut || '';
-    // A cue was just cleared out from under the as-run log; close its entry.
-    closeCueRun();
-    saveCues();
-    savePresets();
-    saveSettings();
-    saveKeymap();
-    saveSchedule();
-    pushSettings();
-    setFromInputs();
-    syncSchedInputs();
-    renderCues();
-    renderMsgs();
-    updateCustomBtn();
-    paintKeyHints();
-    paintSchedule();
-    broadcast();
+    // M9: validate before mutating live state
+    try {
+      if (data == null || typeof data !== 'object') throw new Error('Show file is empty or invalid');
+      if (data.cues != null && !Array.isArray(data.cues)) throw new Error('cues must be an array');
+      if (data.presets != null && !Array.isArray(data.presets)) throw new Error('presets must be an array');
+      if (data.settings != null && typeof data.settings !== 'object') throw new Error('settings must be an object');
+      if (data.keymap != null && typeof data.keymap !== 'object') throw new Error('keymap must be an object');
+
+      running = false;
+      activeCue = -1;
+      todMode = false;
+      countUp = false;
+      blackout = false;
+      clearArm();
+      message = '';
+      msgSource = null;
+      cues = (data.cues || []).map(normaliseCue);
+      presets = Array.isArray(data.presets) ? data.presets.filter(p => p && p.trim()) : defaultPresets.slice();
+      settings = Object.assign({}, defaultSettings, data.settings || {});
+      if (settings.logo) settings.logo = sanitiseLogo(settings.logo);
+      keymap = Object.assign({}, defaultKeymap, data.keymap || {});
+      // Absent in a file means "no plan", not "keep the last one" — otherwise New Show
+      // and older show files would quietly leave a stale schedule driving drift.
+      plannedStart = data.plannedStart || '';
+      hardOut = data.hardOut || '';
+      // A cue was just cleared out from under the as-run log; close its entry.
+      closeCueRun();
+      saveCues();
+      savePresets();
+      saveSettings();
+      saveKeymap();
+      saveSchedule();
+      pushSettings();
+      setFromInputs();
+      syncSchedInputs();
+      renderCues();
+      renderMsgs();
+      updateCustomBtn();
+      paintKeyHints();
+      paintSchedule();
+      broadcast();
+    } catch (err) {
+      say('Could not apply show', String(err && err.message || err));
+    }
   }
 
   $('saveShowBtn').addEventListener('click', async () => {
@@ -3154,6 +3406,12 @@
     if (!res.data || res.data.app !== 'StageCredit') {
       say('Not a show file', 'That doesn\'t look like a StageCredit show file.');
       return;
+    }
+    if (running) {
+      const yes = await ask('Load show while running?',
+        'The clock is running. Loading a show will stop it and replace the rundown.',
+        'Load show', true);
+      if (!yes) return;
     }
     pushUndo('load show', true);
     applyShow(res.data);
@@ -3204,15 +3462,23 @@
   } else {
     bootDone();
   }
-  // periodic broadcast so a reopened display syncs even when paused.
-  // paintSchedule lives here rather than in broadcast(): it walks the whole cue list,
-  // and wall-clock projections only need refreshing once a second.
+  // periodics: schedule always; force wire snapshot when paused for reopened displays (L8).
   setInterval(() => {
-    broadcast(true); pollOutputs(); paintSchedule();
+    if (!running) broadcast(true);
+    pollOutputs();
+    paintSchedule();
     if (netInfo && netInfo.running) {
       window.timerAPI.serverStatus().then(st => { netInfo = st; renderNet(); });
     }
   }, 1000);
+
+  // M2: browser beforeunload when running (also covers rare Chromium reload paths)
+  window.addEventListener('beforeunload', (e) => {
+    if (running) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 
   }  // end initApp
 
