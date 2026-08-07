@@ -12,9 +12,14 @@
 //     output is not acceptable on a venue network.
 // The token is generated per session and shown in the control panel.
 //
-// Origin/Host: HTTP pages may be opened from any LAN client (intentional for viewers).
-// WebSocket control messages accept no Origin or Origin matching this Host; other
-// browser origins cannot drive the show from a tab on a random site.
+// Origin/Host (L3):
+//   * VIEWER HTTP paths stay open on the venue LAN (intentional — read-only countdown).
+//   * Every request needs a sane Host header (rejects empty / junk).
+//   * Control paths (/remote HTML, /api/*) and control WebSocket upgrades require:
+//       - token (where applicable), and
+//       - if Origin is present (browsers), it must match the request Host
+//         so a random site on the LAN cannot drive the show via the browser.
+//   * Non-browser Companion clients typically send no Origin and still work with the token.
 
 const http = require('http');
 const fs = require('fs');
@@ -57,13 +62,13 @@ const ACTIONS = [
   'go', 'next', 'prev', 'cue', 'add', 'set', 'message', 'clearmessage', 'preset'
 ];
 
-// Mirrored in display/remote (and control) meta tags. Scripts are external JS files
-// so script-src is 'self' only. style-src keeps 'unsafe-inline' for <style> blocks
-// and inline style attributes (see docs/review/fix-status.md).
+// Mirrored in display/remote meta tags. Scripts and main CSS are external files
+// so script-src / style-src are 'self' only on LAN pages (no unsafe-inline styles).
+// Control panel is file:// only and keeps style-src 'unsafe-inline' for style= attrs.
 const CSP_HTML = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self'",
   "img-src 'self' data:",
   "font-src 'self'",
   "connect-src 'self'",
@@ -73,8 +78,11 @@ const CSP_HTML = [
   "frame-ancestors 'none'"
 ].join('; ');
 
-// Only these root-level scripts may be served over LAN (display + remote pages).
-const ALLOWED_APP_SCRIPTS = new Set(['/display-app.js', '/remote-app.js']);
+// Only these root-level app assets may be served over LAN (no general static tree).
+const ALLOWED_APP_ASSETS = new Set([
+  '/display-app.js', '/remote-app.js',
+  '/display.css', '/remote.css'
+]);
 
 function localAddresses() {
   const out = [];
@@ -184,6 +192,12 @@ module.exports = function createServer(opts) {
   }
 
   async function handleAction(url, req, res) {
+    if (!hostLooksLocal(req.headers.host)) {
+      return sendJson(res, 400, { ok: false, error: 'Bad Host' });
+    }
+    if (!controllerOriginOk(req)) {
+      return sendJson(res, 403, { ok: false, error: 'Origin not allowed' });
+    }
     if (!authed(url, req)) return sendJson(res, 401, { ok: false, error: 'Bad or missing token' });
     const action = (url.searchParams.get('a') || url.searchParams.get('action') || '').toLowerCase();
     if (!ACTIONS.includes(action)) {
@@ -193,9 +207,10 @@ module.exports = function createServer(opts) {
       ? url.searchParams.get('v') : url.searchParams.get('value');
     try {
       const r = await Promise.resolve(dispatch(action, value));
-      sendJson(res, r && r.ok !== false ? 200 : 503, r || { ok: false });
+      // M7: pass through applied/ignored from the control renderer
+      sendJson(res, r && r.ok !== false ? 200 : 503, r || { ok: false, applied: false });
     } catch (err) {
-      sendJson(res, 503, { ok: false, error: String(err && err.message || err) });
+      sendJson(res, 503, { ok: false, applied: false, error: String(err && err.message || err) });
     }
   }
 
@@ -234,11 +249,19 @@ module.exports = function createServer(opts) {
     }
     const p = url.pathname;
 
+    // L3: reject missing/suspicious Host on every path (viewers included).
+    if (!hostLooksLocal(req.headers.host)) {
+      return send(res, 400, 'Bad Host');
+    }
+
     // Companion's Generic HTTP module is easiest to configure with GET, so actions
     // accept both verbs. Not strictly RESTful; deliberately pragmatic.
     if (p === '/api/action') return handleAction(url, req, res);
 
     if (p === '/api/state') {
+      if (!controllerOriginOk(req)) {
+        return sendJson(res, 403, { ok: false, error: 'Origin not allowed' });
+      }
       if (!authed(url, req)) return sendJson(res, 401, { ok: false, error: 'Bad or missing token' });
       const snap = getSnapshot();
       const c = wireCuesPayload(snap.cues);
@@ -253,12 +276,15 @@ module.exports = function createServer(opts) {
       });
     }
 
-    // Viewer pages — open, read-only.
+    // Viewer pages — open, read-only (intentional on venue LAN).
     if (p === '/' || p === '/display') return sendPage(res, 'display.html');
     if (p === '/clock') return sendPage(res, 'display.html', 'view-clock');
 
     // Remote control — gated, because it can drive the show.
     if (p === '/remote') {
+      if (!controllerOriginOk(req)) {
+        return send(res, 403, 'Origin not allowed', 'text/plain; charset=utf-8');
+      }
       if (!authed(url, req)) {
         return send(res, 401,
           '<!doctype html><meta charset="utf-8"><title>StageCredit</title>' +
@@ -288,8 +314,8 @@ module.exports = function createServer(opts) {
 
     if (p.startsWith('/fonts/')) return sendFile(res, p);
 
-    // App page scripts (L10 modularization) — allow-listed, not a general static tree.
-    if (ALLOWED_APP_SCRIPTS.has(p)) return sendFile(res, p);
+    // Display/remote app assets — allow-listed, not a general static tree.
+    if (ALLOWED_APP_ASSETS.has(p)) return sendFile(res, p);
 
     send(res, 404, 'Not found');
   }
@@ -340,15 +366,18 @@ module.exports = function createServer(opts) {
   function hostLooksLocal(hostHeader) {
     if (!hostHeader) return false;
     const host = String(hostHeader).split(':')[0].toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
-    // bare IPv4 or hostname on LAN is fine; reject empty / suspicious
-    return host.length > 0 && !/[\s\\]/.test(host);
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return true;
+    // bare IPv4 or LAN hostname is fine; reject empty / path-like / whitespace junk
+    if (!host.length || /[\s\\/]/.test(host)) return false;
+    if (host.includes('..')) return false;
+    return true;
   }
 
-  // L3: for control WS messages, Origin if present must match Host
+  // L3: browsers send Origin; Companion / curl usually do not.
+  // When Origin is present it must match Host (same-origin for control).
   function controllerOriginOk(req) {
     const origin = req.headers.origin;
-    if (!origin) return true; // Companion / non-browser clients
+    if (!origin) return true;
     try {
       const o = new URL(origin);
       const reqHost = (req.headers.host || '').toLowerCase();
@@ -370,8 +399,9 @@ module.exports = function createServer(opts) {
           if (WebSocketServer) {
             wss = new WebSocketServer({ server: httpServer, path: '/ws' });
             wss.on('connection', (ws, req) => {
+              // L3: Host required for every WS; controller also needs Origin match + token.
               if (!hostLooksLocal(req.headers.host)) {
-                try { ws.close(); } catch (e) {}
+                try { ws.close(1008, 'Bad Host'); } catch (e) {}
                 return;
               }
               let url;
@@ -379,6 +409,12 @@ module.exports = function createServer(opts) {
               catch (e) { url = null; }
               const tokenOk = url ? authed(url, req) : false;
               const originOk = controllerOriginOk(req);
+              // Viewers may omit token; controllers need token + origin.
+              // Reject controller-token sockets from foreign Origin outright (no half-open control).
+              if (tokenOk && !originOk) {
+                try { ws.close(1008, 'Origin not allowed'); } catch (e) {}
+                return;
+              }
               ws.isController = tokenOk && originOk;
               sockets.add(ws);
               ws.on('close', () => sockets.delete(ws));

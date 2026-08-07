@@ -240,33 +240,59 @@
   }
 
   // v2: state bar, ends-at, progress, next cue.
-  // renderStatus runs every animation frame, so every write is memoised —
-  // only touch the DOM when the value actually changed.
+  // M13: every local paint path is memoised — class toggles, widths, and text all
+  // skip the DOM when the value is unchanged (rAF only advances remaining).
   const lastPaint = {};
   function setText(id, val) {
     if (lastPaint[id] === val) return;
     lastPaint[id] = val;
     $(id).textContent = val;
   }
+  function setClass(id, cls) {
+    if (lastPaint['cls:' + id] === cls) return;
+    lastPaint['cls:' + id] = cls;
+    $(id).className = cls;
+  }
+  function setToggle(el, name, on) {
+    const key = 'tg:' + (el.id || name) + ':' + name;
+    const v = on ? 1 : 0;
+    if (lastPaint[key] === v) return;
+    lastPaint[key] = v;
+    el.classList.toggle(name, on);
+  }
+  function setDisabled(el, on) {
+    const key = 'dis:' + (el.id || el);
+    const v = on ? 1 : 0;
+    if (lastPaint[key] === v) return;
+    lastPaint[key] = v;
+    el.disabled = on;
+  }
+  function setStyleWidth(el, pct) {
+    const key = 'w:' + (el.id || 'x');
+    if (lastPaint[key] === pct) return;
+    lastPaint[key] = pct;
+    el.style.width = pct + '%';
+  }
   // v2: the manual block states plainly who owns the clock — a cue, or you.
   function renderManual() {
     const manual = activeCue < 0;
-    $('manualBlock').classList.toggle('on', manual);
-    $('manualBtn').disabled = manual;
+    setToggle($('manualBlock'), 'on', manual);
+    setDisabled($('manualBtn'), manual);
     setText('manualBtn', manual ? 'Manual active' : 'Take manual');
     setText('manualState', manual
       ? 'Manual — load a cue to hand back'
       : 'Cue ' + (activeCue + 1) + ' "' + cues[activeCue].name + '" owns the clock');
-    $('min').disabled = $('sec').disabled = !manual;
-    $('setManualBtn').disabled = !manual;
+    setDisabled($('min'), !manual);
+    setDisabled($('sec'), !manual);
+    setDisabled($('setManualBtn'), !manual);
   }
 
   function renderStatus() {
     const wrap = $('preview');
     const over = !todMode && !countUp && remaining <= 0;
-    wrap.classList.toggle('running', running && !over);
-    wrap.classList.toggle('paused', !running && !todMode && (countUp || remaining > 0));
-    wrap.classList.toggle('over', over);
+    setToggle(wrap, 'running', running && !over);
+    setToggle(wrap, 'paused', !running && !todMode && (countUp || remaining > 0));
+    setToggle(wrap, 'over', over);
 
     let label;
     if (blackout) label = 'Blanked';
@@ -288,25 +314,32 @@
       if (total > 0) pct = Math.min(100, Math.max(0, (1 - remaining / total) * 100));
       else if (remaining <= 0) pct = 100;
     }
-    $('progressFill').style.width = pct + '%';
+    // Second-resolution progress is enough for a cue bar (avoids every-rAF style write).
+    const pctRound = Math.round(pct * 10) / 10;
+    setStyleWidth($('progressFill'), pctRound);
 
     // An armed cue (set by a digit key) overrides the natural next.
     const armIdx = armedIndex();
     const autoIdx = activeCue >= 0 ? activeCue + 1 : (cues.length ? 0 : -1);
     const nextIdx = (armIdx != null && cues[armIdx]) ? armIdx : autoIdx;
     const next = nextIdx >= 0 ? cues[nextIdx] : null;
-    const nv = $('nextVal');
     if (next) {
-      nv.className = 'val' + (armIdx != null ? ' armed' : '');
+      setClass('nextVal', 'val' + (armIdx != null ? ' armed' : ''));
       setText('nextVal', (armIdx != null ? 'ARMED  ' : '') + (nextIdx + 1) + '. ' + next.name + ' — '
         + (next.type === 'tod' ? 'TOD' : next.type === 'countup' ? 'Count up' : fmt(next.seconds)));
-      $('goBtn').disabled = false;
-      $('goBtn').dataset.idx = String(nextIdx);
+      setDisabled($('goBtn'), false);
+      if (lastPaint.goIdx !== nextIdx) {
+        lastPaint.goIdx = nextIdx;
+        $('goBtn').dataset.idx = String(nextIdx);
+      }
     } else {
-      nv.className = 'val none';
+      setClass('nextVal', 'val none');
       setText('nextVal', cues.length ? 'End of cue list' : 'No cues yet');
-      $('goBtn').disabled = true;
-      delete $('goBtn').dataset.idx;
+      setDisabled($('goBtn'), true);
+      if (lastPaint.goIdx != null) {
+        lastPaint.goIdx = null;
+        delete $('goBtn').dataset.idx;
+      }
     }
 
   }
@@ -376,11 +409,12 @@
     }, 180);
   }
 
-  // 10Hz is ample: the displayed clock is M:SS, so it can only change once a second,
-  // and warning/overtime are CSS classes. The control panel's own preview still
-  // repaints — local preview paths are memoised (M13).
+  // Wire push ~10Hz; local preview is second-resolution and fully memoised (M13).
+  // rAF still advances remaining; DOM/IPC only when values change or force=true.
   const PUSH_MS = 100;
   let lastPush = 0;
+  let lastLocalPaint = 0;
+  const LOCAL_PAINT_MS = 50; // cap local DOM work while rAF is hot
   const prevLocal = {};
 
   function broadcast(force) {
@@ -392,6 +426,10 @@
       lastPush = now;
       window.timerAPI.sendUpdate(state);
     }
+
+    // Skip local paint thrash when nothing can have changed visually this frame.
+    if (!force && now - lastLocalPaint < LOCAL_PAINT_MS) return;
+    lastLocalPaint = now;
 
     const timeStr = todMode ? fmtClock() : countUp ? fmtUp(remaining) : fmt(remaining);
     if (prevLocal.time !== timeStr) {
@@ -2462,10 +2500,9 @@
   } else {
     bootDone();
   }
-  // periodics: schedule always; force wire snapshot when paused for reopened displays (L8).
+  // L8: no redundant force-resync every second. Displays get join snapshots / requestSnapshot;
+  // wire runs from tick+broadcast. Keep only wall-clock schedule ETAs and light net UI refresh.
   setInterval(() => {
-    if (!running) broadcast(true);
-    pollOutputs();
     paintSchedule();
     if (netInfo && netInfo.running) {
       window.timerAPI.serverStatus().then(st => { netInfo = st; renderNet(); });

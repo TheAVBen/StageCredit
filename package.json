@@ -27,10 +27,13 @@
       "asrun.js",
       "control.html",
       "control-app.js",
+      "control.css",
       "display.html",
       "display-app.js",
+      "display.css",
       "remote.html",
       "remote-app.js",
+      "remote.css",
       "fonts/**"
     ],
     "mac": {

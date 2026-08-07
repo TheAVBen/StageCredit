@@ -1,0 +1,152 @@
+/* StageCredit display / clock view styles. */
+* { margin: 0; box-sizing: border-box; }
+  :root {
+    --bg-c: #111111;
+    --time-c: #f2f2f2;
+    --msg-c: #ffcc02;
+    --warn-c: #ffcc02;
+    --danger-c: #ff4d4f;
+    --scale: 1;
+    --tod-scale: 1;
+    --next-scale: 1;
+    --font: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg-c); color: var(--time-c); overflow: hidden; cursor: none;
+    font-family: var(--font);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  #brand {
+    position: fixed; bottom: 3vh; left: 0; right: 0; text-align: center;
+    font-size: 1.8vw; font-weight: 700; color: #4a495e;
+    letter-spacing: -.01em; text-transform: lowercase;
+  }
+  #brand .tv {
+    color: #ffcc02; opacity: .7; font-size: .5em; font-weight: 800;
+    vertical-align: .75em;
+  }
+  #time {
+    font-size: calc(28vw * var(--scale)); font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+    color: var(--time-c);
+  }
+  body.tod #time { font-size: calc(20vw * var(--scale)); }
+  body.warning #time { color: var(--warn-c); }
+  body.danger #time { color: var(--danger-c); }
+  body.flash { animation: flash 0.5s steps(2) infinite; }
+  @keyframes flash {
+    0% { background: var(--bg-c); }
+    50% { background: #7a0000; }
+  }
+  /* The clock must never move when a message appears. So this band is a FIXED
+     height — exactly one line, scaled with --scale — and stays that height whether
+     it's empty, short, or long. line-height equals the height, which both centres
+     the text vertically and survives the autofit shrink in script (that changes
+     font-size only). Long messages are shrunk to fit rather than wrapped. */
+  #message {
+    --msg-line: calc(7vw * var(--scale) * 1.15);
+    font-size: calc(7vw * var(--scale)); font-weight: 800; color: var(--msg-c);
+    letter-spacing: .05em;
+    margin-top: 2vh; text-align: center; padding: 0 4vw;
+    height: var(--msg-line); line-height: var(--msg-line);
+    white-space: nowrap; overflow: hidden;
+    text-transform: uppercase;
+  }
+  #logoImg {
+    position: fixed; bottom: 3vh; left: 50%; transform: translateX(-50%);
+    max-height: 9vh; max-width: 40vw; display: none;
+  }
+  /* Both bands are FIXED height for the same reason as #message: the body is a
+     centred flex column, so anything that collapses to zero height when empty
+     shifts the clock the moment a cue with a name loads. height == line-height
+     centres the text and holds the box whether or not there's content. */
+  #cueTitle {
+    font-size: calc(4.5vw * var(--scale)); font-weight: 700;
+    color: var(--time-c); opacity: .85; text-align: center;
+    text-transform: uppercase; letter-spacing: .08em; padding: 0 4vw;
+    height: calc(4.5vw * var(--scale) * 1.15); line-height: calc(4.5vw * var(--scale) * 1.15);
+    white-space: nowrap; overflow: hidden;
+  }
+  #cueSub {
+    font-size: calc(2.5vw * var(--scale)); font-weight: 600;
+    color: var(--time-c); opacity: .5; text-align: center;
+    letter-spacing: .05em; margin-bottom: 1vh; padding: 0 4vw;
+    height: calc(2.5vw * var(--scale) * 1.15); line-height: calc(2.5vw * var(--scale) * 1.15);
+    white-space: nowrap; overflow: hidden;
+  }
+  #paused {
+    position: fixed; top: 3vh; right: 3vw; font-size: 2.5vw;
+    color: #8b93a7; font-weight: 600; letter-spacing: .2em;
+    display: none;
+  }
+  /* Collision avoidance: PAUSED moves to the free top corner, and the link-lost
+     warning to the free bottom one, rather than stacking on the clock. */
+  body.tod-tr.showtod #paused { right: auto; left: 3vw; }
+  body.tod-br.showtod #linkLost { right: auto; left: 3vw; }
+  /* Wall clock alongside the countdown. Fixed-position on purpose: it sits outside
+     the centred stack, so it can appear, disappear or resize without ever moving the
+     timer. Sized by its own --tod-scale rather than --scale, so changing the main
+     timer size doesn't drag it along. */
+  #todClock {
+    position: fixed; top: 3vh; left: 3vw; font-size: calc(2.5vw * var(--tod-scale));
+    color: var(--time-c); opacity: .4; font-weight: 700;
+    font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    display: none;
+  }
+  body.showtod #todClock { display: block; }
+  /* Four corners. Each rule clears the opposite edges so switching never leaves a
+     stale offset behind. */
+  body.tod-tl #todClock { top: 3vh; left: 3vw; right: auto; bottom: auto; }
+  body.tod-tr #todClock { top: 3vh; right: 3vw; left: auto; bottom: auto; }
+  body.tod-bl #todClock { bottom: 3vh; left: 3vw; right: auto; top: auto; }
+  body.tod-br #todClock { bottom: 3vh; right: 3vw; left: auto; top: auto; }
+  /* Redundant when the whole display is already a clock */
+  body.tod #todClock { display: none; }
+  /* "Next up" for the presenter. Fixed-position, above the wordmark: like the corner
+     clock it sits outside the centred stack, so it can appear and disappear between
+     cues without ever nudging the timer. */
+  /* Faded rather than display-toggled: it now appears partway through a cue rather
+     than at cue load, and a hard pop-in mid-countdown pulls the eye off the clock.
+     Kept in the layout permanently (harmless — it's fixed-position) so opacity can
+     actually transition. */
+  #nextUp {
+    position: fixed; bottom: 8.5vh; left: 0; right: 0; text-align: center;
+    font-size: calc(2vw * var(--next-scale)); font-weight: 700; color: var(--time-c);
+    letter-spacing: .06em; text-transform: uppercase; padding: 0 6vw;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    opacity: 0; transition: opacity .4s ease; pointer-events: none;
+  }
+  body.next-bottom #nextUp { bottom: 8.5vh; top: auto; }
+  body.next-top #nextUp { top: 4vh; bottom: auto; }
+  /* Sharing an edge with the corner clock: pull the centred text in so a long cue
+     name can't run underneath it. */
+  body.next-top.tod-tl.showtod #nextUp,
+  body.next-top.tod-tr.showtod #nextUp,
+  body.next-bottom.tod-bl.showtod #nextUp,
+  body.next-bottom.tod-br.showtod #nextUp { padding: 0 18vw; }
+  #nextUp .lab { opacity: .6; margin-right: .6em; font-weight: 600; }
+  body.hasnext #nextUp { opacity: .45; }
+
+  /* Blackout — instantly blank the output without closing the window */
+  body.blackout { background: #000 !important; animation: none !important; }
+  body.blackout > * { visibility: hidden; }
+
+  /* Clock-only confidence view: same engine, stripped presentation. Only the timer
+     survives, so FOH gets an unambiguous readout with nothing else competing. */
+  body.view-clock #message,
+  body.view-clock #cueTitle,
+  body.view-clock #cueSub,
+  body.view-clock #nextUp,
+  body.view-clock #brand,
+  body.view-clock #logoImg { display: none !important; }
+  body.view-clock #time { font-size: calc(34vw * var(--scale)); }
+  body.view-clock.tod #time { font-size: calc(24vw * var(--scale)); }
+
+  /* Shown on served pages only, when the socket drops. Fixed-position so it can
+     never shift the clock. */
+  #linkLost {
+    position: fixed; bottom: 3vh; right: 3vw; font-size: 1.6vw; font-weight: 700;
+    color: #ff4d4f; letter-spacing: .12em; text-transform: uppercase; display: none;
+  }
+  body.lost #linkLost { display: block; }

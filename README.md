@@ -47,11 +47,11 @@ Output lands in `dist/`. Builds are unsigned: macOS needs right-click → Open o
 | File | Purpose |
 |---|---|
 | `main.js` | Electron main process — windows, display picker, state persistence, show file dialogs |
-| `preload.js` | IPC bridge between windows |
-| `control.html` | Operator control panel (all UI + timer engine) |
+| `preload-control.js` / `preload-display.js` | Least-privilege IPC bridges (legacy `preload.js` re-exports control) |
+| `control.html` + `control-app.js` + `control.css` | Operator control panel (timer engine, UI, network controls) |
 | `control-legacy.html` | The pre-redesign control panel, kept for reference. Not loaded, not shipped. |
-| `display.html` | Presenter display — also served over the LAN as `/display` and `/clock` |
-| `remote.html` | Phone remote, served at `/remote` behind the session token |
+| `display.html` + `display-app.js` + `display.css` | Presenter display — also served over the LAN as `/display` and `/clock` |
+| `remote.html` + `remote-app.js` + `remote.css` | Phone remote, served at `/remote` behind the session token |
 | `server.js` | LAN HTTP + WebSocket server and the Companion action API |
 | `asrun.js` | As-run log, appended from the main process as JSON Lines |
 | `fonts/` | Montserrat, bundled locally (SIL OFL 1.1 — licence included) so launch never waits on the network |
@@ -60,9 +60,10 @@ Output lands in `dist/`. Builds are unsigned: macOS needs right-click → Open o
 | `StageCredit User Guide.pdf` | Branded user guide for the crew |
 | `tools-make-guide.py` | Regenerates that guide — `pip install reportlab && python3 tools-make-guide.py`. Bump `VERSION` at the top when you cut a release |
 
-Both windows carry a Content-Security-Policy that denies `unsafe-eval`; the control
-panel additionally denies network access outright, and the served pages allow only a
-same-origin WebSocket back to the app.
+Pages ship external scripts and stylesheets. Control keeps a tiny boot `<style>` and layout
+`style=` attributes (so its CSP still allows style-src `'unsafe-inline'`); display/remote CSS
+is pure external files with style-src `'self'` only. LAN serving allow-lists only the
+display/remote JS+CSS assets plus fonts and the logo endpoint.
 
 Cues, messages, settings, and shortcuts persist per-user via `localStorage`; the display
 windows' position/fullscreen state and the as-run log live in the app's user data folder.
@@ -75,10 +76,10 @@ watches your countdown); anything that can change the output needs the token.
 
 | Path | Auth | Purpose |
 |---|---|---|
-| `/display`, `/clock` | open | The two output views in a browser |
-| `/remote` | token | Phone remote |
-| `/api/action?a=…&t=…` | token | Single action, GET or POST (Companion-friendly) |
-| `/api/state?t=…` | token | Current state and cue list as JSON |
+| `/display`, `/clock` | open | The two output views in a browser (intentional open viewers on venue LAN) |
+| `/remote` | token (+ Origin must match Host if sent) | Phone remote |
+| `/api/action?a=…&t=…` | token (+ Origin match if sent) | Single action, GET or POST (Companion-friendly). Response includes `applied` |
+| `/api/state?t=…` | token (+ Origin match if sent) | Current state and cue list as JSON |
 | `/api/health` | open | Liveness check |
 
 Actions: `start`, `pause`, `toggle`, `reset`, `tod`, `blank`, `blankon`, `blankoff`,

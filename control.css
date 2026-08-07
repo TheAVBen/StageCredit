@@ -1,0 +1,497 @@
+/* StageCredit control panel styles (extracted for style-src self). */
+* { box-sizing: border-box; margin: 0; }
+  /* Always reserve the scrollbar gutter. Without this, content crossing the
+     window height makes a scrollbar appear, the layout narrows by ~15px, and
+     everything reflows sideways — which is what nudged the clock. */
+  html { scrollbar-gutter: stable; overflow-y: scroll; }
+  body {
+    font-family: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #2c2b3b; color: #f2f2f2; padding: 14px 16px 16px;
+    user-select: none;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  h1 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; text-transform: lowercase; }
+  h1 .tv { color: #ffcc02; font-size: .5em; font-weight: 800; vertical-align: .75em; letter-spacing: 0; }
+  .tagline { font-size: 9px; color: #9b9aad; letter-spacing: .22em; text-transform: uppercase; font-weight: 700; }
+  .topbar-right { display: flex; gap: 6px; align-items: center; }
+  .outstatus {
+    display: flex; align-items: center; gap: 6px; font-size: 10px; color: #9b9aad;
+    background: #23222f; border-radius: 7px; padding: 7px 10px; margin-right: 4px;
+    letter-spacing: .04em; white-space: nowrap;
+  }
+  .outdot { width: 7px; height: 7px; border-radius: 50%; background: #9b9aad; flex: 0 0 auto; }
+  .outdot.live { background: #3ddc84; }
+  .outdot.warn { background: #ff4d4f; }
+  .outstatus { cursor: pointer; }
+
+  /* ---------- Buttons ---------- */
+  button {
+    flex: 1; padding: 12px 8px; border: none; border-radius: 8px;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    background: #454458; color: #f2f2f2;
+    text-transform: uppercase; letter-spacing: .06em; font-family: inherit;
+  }
+  button:hover { filter: brightness(1.15); }
+  button:active { transform: scale(.98); }
+  button:focus-visible { outline: 2px solid #ffcc02; outline-offset: 2px; }
+  .start { background: #ffcc02; color: #111; }
+  .pause { background: #f2f2f2; color: #111; }
+  .reset { background: #454458; }
+  .quick { background: #23222f; font-size: 12px; min-height: 44px; }
+  .send { background: #ffcc02; color: #111; }
+  .clear-on { background: #ff4d4f; color: #fff; }
+  .small { font-size: 11px; padding: 14px 13px; background: #23222f; color: #9b9aad; flex: 0 0 auto; min-height: 44px; }
+  .small.on { background: #1d5c3a; color: #8ff0bd; }
+  .hint { opacity: .55; font-weight: 700; margin-left: 5px; }
+
+  /* ---------- Layout ---------- */
+  .cols { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: minmax(0,1fr); } }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  label {
+    font-size: 9px; color: #9b9aad; display: block; margin-bottom: 5px;
+    text-transform: uppercase; letter-spacing: .18em; font-weight: 700;
+  }
+  hr { border: none; border-top: 1px solid #454458; margin: 14px 0; }
+  input[type="number"], input[type="text"], select {
+    width: 100%; padding: 10px; border: 1px solid #454458; border-radius: 8px;
+    background: #23222f; color: #f2f2f2; font-size: 15px; text-align: center; font-family: inherit;
+  }
+  input[type="text"] { text-align: left; }
+  select { text-align: left; cursor: pointer; }
+  input:focus, select:focus { outline: 2px solid #ffcc02; border-color: #ffcc02; }
+  input:disabled { opacity: .35; }
+  input[type="range"] { accent-color: #ffcc02; }
+
+  /* ---------- Clock ---------- */
+  .clockwrap {
+    background: #111; border-radius: 12px; padding: 14px 18px 16px;
+    border-left: 5px solid #9b9aad; font-variant-numeric: tabular-nums;
+  }
+  .clockwrap.running { border-left-color: #3ddc84; }
+  .clockwrap.paused  { border-left-color: #7f8bb5; }
+  .clockwrap.over    { border-left-color: #ff4d4f; }
+  /* Fixed height and no wrapping: this row sits directly above the clock, so if it
+     ever reflowed to two lines the clock would jump. */
+  .clockmeta {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    margin-bottom: 2px; height: 14px; flex-wrap: nowrap; overflow: hidden;
+  }
+  .clockmeta > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statelabel { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; color: #9b9aad; }
+  .clockwrap.running .statelabel { color: #3ddc84; }
+  .clockwrap.paused  .statelabel { color: #9aa6d0; }
+  .clockwrap.over    .statelabel { color: #ff4d4f; }
+  .endsat { font-size: 11px; color: #9b9aad; letter-spacing: .04em; }
+  .preview .time {
+    font-size: clamp(54px, 8.5vw, 112px); line-height: 1;
+    font-weight: 800; color: #f2f2f2; letter-spacing: -.02em; display: block;
+  }
+  .preview .cuename {
+    font-size: 12px; color: #9b9aad; letter-spacing: .05em; font-weight: 600;
+    min-height: 15px; margin-top: 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .progress { height: 3px; background: #454458; border-radius: 2px; margin-top: 10px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: #3ddc84; border-radius: 2px; transition: width .2s linear; }
+  .clockwrap.paused .progress > div { background: #7f8bb5; }
+  .clockwrap.over   .progress > div { background: #ff4d4f; }
+  #cueNotes {
+    display: none; font-size: 12px; color: #d8d7e4; background: #23222f;
+    border-left: 3px solid #ffcc02; padding: 9px 11px; margin-top: 8px; line-height: 1.45;
+  }
+
+  /* ---------- Transport ---------- */
+  .transport { display: flex; gap: 6px; margin-top: 10px; align-items: stretch; }
+  /* A gap so Blank is not adjacent to TOD — they used to be identical .quick buttons
+     side by side, and one of them blanks the programme output. */
+  .transport .spacer { flex: 0 0 14px; }
+  #blackBtn {
+    position: relative; overflow: hidden; flex: 1.15;
+    background: #2a1214; border: 1px solid #7a2c2e; color: #ff8f90; font-size: 12px;
+  }
+  #blackBtn.on { background: #ff4d4f; border-color: #ff4d4f; color: #fff; }
+  /* Fills left-to-right while held; releasing early cancels. */
+  #blackBtn .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: rgba(255,77,79,.35); pointer-events: none;
+  }
+  .transport #startBtn { flex: 2.4; padding: 18px 8px; font-size: 15px; }
+  .transport .reset, .transport .quick { flex: 1; padding: 18px 8px; }
+  .adds { display: flex; gap: 6px; margin-top: 6px; }
+  .adds button { padding: 9px 4px; font-size: 11px; }
+  /* ---------- Clock speed ---------- */
+  /* Lives on the main surface, not in Settings: it's used mid-show to claw back or
+     give away schedule. The amber treatment plus the flag on the clock is what makes
+     an accidental drag obvious rather than silent. */
+  .speedrow {
+    position: relative; margin-top: 10px; border: 1px solid #454458;
+    border-radius: 10px; padding: 9px 12px 11px; background: #262532;
+  }
+  /* Two-click: the slider is disabled and covered until deliberately armed, so a
+     stray drag past the bottom of the panel can't retime the show. Re-arms itself
+     after 8s of no input, so it can never be left open for the rest of the night. */
+  .armveil {
+    position: absolute; inset: 0; width: 100%; border-radius: 10px;
+    background: #2c2b3b; color: #6f6e80; border: none;
+    font-family: inherit; font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: none; cursor: pointer;
+  }
+  .armveil b { color: #9b9aad; font-variant-numeric: tabular-nums; }
+  .armveil:hover { background: #313040; color: #9b9aad; filter: none; }
+  .speedrow.armed .armveil { display: none; }
+  /* Off 1.00x the veil still reports it — evidence must survive disarming. */
+  body.speedy .armveil { background: #2f2a1a; color: #ffcc02; }
+  body.speedy .armveil b { color: #ffcc02; }
+  body.speedy .speedrow { border-color: #ffcc02; background: #2f2a1a; }
+  .speedrow .shead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .speedrow .slbl {
+    font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    font-weight: 700; color: #9b9aad;
+  }
+  body.speedy .speedrow .slbl { color: #ffcc02; }
+  .speedrow .shead .small { padding: 8px 10px; min-height: 0; font-size: 10px; visibility: hidden; }
+  body.speedy .speedrow .shead .small { visibility: visible; }
+  .speedrow .sbody { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+  .speedrow input[type="range"] { flex: 1; }
+  .speedrow .sval {
+    flex: 0 0 54px; text-align: right; font-size: 13px; font-weight: 700;
+    font-variant-numeric: tabular-nums; color: #9b9aad;
+  }
+  body.speedy .speedrow .sval { color: #ffcc02; }
+  body.touch .speedrow { padding: 13px 14px 15px; }
+  body.touch .speedrow .sval { font-size: 16px; }
+
+  /* ---------- Manual override ---------- */
+  .manualblock {
+    margin-top: 10px; border: 1px solid #454458; border-radius: 10px;
+    padding: 10px 12px 12px; background: #262532;
+  }
+  .manualblock.on { border-color: #ffcc02; background: #2f2a1a; }
+  .mhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .mlabel {
+    font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    font-weight: 700; color: #9b9aad; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .manualblock.on .mlabel { color: #ffcc02; }
+  .manualblock.on #manualBtn { background: #ffcc02; color: #111; }
+  .mbody { display: flex; gap: 8px; align-items: flex-end; }
+  .mbody > div { flex: 1; }
+  .mbody label { margin-bottom: 4px; }
+  .mbody #setManualBtn { flex: 0 0 72px; padding: 10px 8px; }
+  .manualblock:not(.on) .mbody { opacity: .5; }
+  .manualblock .mbody input:disabled { opacity: .85; }
+  button:disabled { cursor: default; }
+  #manualBtn:disabled, #setManualBtn:disabled { filter: none; }
+
+  /* ---------- Backtiming strip ---------- */
+  /* The editor pops out of the readout it feeds, rather than sitting in a separate
+     part of the window — cause and effect in one place. */
+  .schedwrap { position: relative; margin-top: 10px; }
+  .schedhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .schedhead label { margin-bottom: 0; }
+  .schedbar {
+    display: grid; grid-template-columns: repeat(3, minmax(0,1fr));
+    gap: 8px; cursor: pointer;
+  }
+  .schedbar:hover .sched { background: #2a2937; }
+
+  .schedpop {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+    background: #2c2b3b; border: 1px solid #ffcc02; border-radius: 10px;
+    padding: 14px; z-index: 8;
+  }
+  .schedpop.open { display: block; }
+  .poprow { display: flex; gap: 12px; margin-bottom: 10px; }
+  .popfield { flex: 1; min-width: 0; }
+  .popfield label { margin-bottom: 4px; }
+  .popfield input[type="time"] {
+    width: 100%; padding: 10px; border: 1px solid #454458; border-radius: 8px;
+    background: #23222f; color: #f2f2f2; font-size: 16px; font-family: inherit;
+    text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .popfield input[type="time"]:focus { outline: 2px solid #ffcc02; border-color: #ffcc02; }
+  .hint2 { display: block; font-size: 10px; color: #6f6e80; margin-top: 5px; line-height: 1.45; }
+  .popsum {
+    font-size: 11px; color: #9b9aad; background: #23222f; border-radius: 8px;
+    padding: 9px 11px; margin-bottom: 10px; line-height: 1.5;
+  }
+  .popsum b { color: #f2f2f2; font-weight: 700; }
+  .sched {
+    background: #23222f; border-radius: 8px; padding: 8px 10px;
+    border-left: 3px solid transparent; min-width: 0;
+  }
+  .sched .lbl {
+    display: block; font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
+    color: #6f6e80; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sched .val {
+    display: block; font-size: 15px; font-weight: 700; color: #f2f2f2;
+    font-variant-numeric: tabular-nums; margin-top: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sched.idle .val { color: #6f6e80; font-weight: 400; }
+  .sched.ahead { border-left-color: #3ddc84; } .sched.ahead .val { color: #3ddc84; }
+  .sched.late  { border-left-color: #ffcc02; } .sched.late  .val { color: #ffcc02; }
+  .sched.bust  { border-left-color: #ff4d4f; } .sched.bust  .val { color: #ff4d4f; }
+  .sched .est { font-size: 10px; font-weight: 700; color: #6f6e80; margin-left: 4px; }
+  /* No schedule set, nothing to report — the strip earns its space or gives it up. */
+  /* Only the three readout boxes are dead space when there's no schedule — the
+     header has to stay, because the button that SETS the schedule lives in it. */
+  .schedbar { display: none; }
+  body.hassched .schedbar { display: grid; }
+  .schedhead .hint { font-size: 10px; color: #6f6e80; font-weight: 400; letter-spacing: 0; }
+  body.hassched .schedhead .hint { display: none; }
+  .nextbar .val.armed { color: #ffcc02; }
+
+  
+  /* Projected clock time per cue row */
+  .cue .eta {
+    font-size: 11px; color: #6f6e80; font-variant-numeric: tabular-nums;
+    flex: 0 0 auto; min-width: 38px; text-align: right;
+  }
+  .cue.active .eta { color: #9b9aad; }
+
+  /* ---------- Now / next ---------- */
+  .nextbar {
+    margin-top: 10px; background: #23222f; border-radius: 10px;
+    padding: 10px 12px; display: flex; align-items: center; gap: 12px;
+  }
+  .nextbar .meta { flex: 1; min-width: 0; }
+  .nextbar .lbl { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #9b9aad; font-weight: 700; }
+  .nextbar .val { font-size: 13px; font-weight: 600; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nextbar .val.none { color: #9b9aad; font-weight: 400; }
+  #goBtn { flex: 0 0 auto; padding: 14px 26px; font-size: 14px; background: #ffcc02; color: #111; }
+  #goBtn:disabled { background: #3a3948; color: #6f6e80; cursor: default; transform: none; filter: none; }
+
+  /* ---------- Cue list ---------- */
+  .sechead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .sechead label { margin-bottom: 0; }
+  #cueList { margin-bottom: 8px; }
+  .cue {
+    display: flex; align-items: center; gap: 8px;
+    background: #23222f; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px;
+    border-left: 3px solid transparent;
+  }
+  .cue.active { border-left-color: #3ddc84; background: #2a2937; }
+  .cue.next { border-left-color: #ffcc02; }
+  .cue .idx { font-size: 11px; color: #6f6e80; width: 15px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .cue .name { flex: 1; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cue.active .name { color: #fff; }
+  .cue .dur { font-size: 12px; color: #9b9aad; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .cue.active .dur { color: #3ddc84; }
+  .cue button { flex: 0 0 auto; padding: 12px 12px; font-size: 11px; min-height: 44px; min-width: 44px; }
+  .cue .load { background: #454458; color: #f2f2f2; }
+  .cue .clear-on { background: #ff4d4f; color: #fff; }
+  .cue .edit { background: transparent; color: #6f6e80; padding: 12px 8px; font-size: 15px; }
+  .cue .edit:hover { color: #f2f2f2; }
+  .cue .del { background: transparent; color: #6f6e80; padding: 12px 8px; font-size: 14px; }
+  .cue .del:hover { color: #ff4d4f; }
+  .cue .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .empty { font-size: 12px; color: #6f6e80; text-align: center; padding: 10px 0 12px; }
+  .cue.draggable { cursor: grab; }
+  .cue.dragging { opacity: .4; }
+  .cue.drag-over { box-shadow: 0 -3px 0 0 #ffcc02; }
+  .cue .grip { color: #6f6e80; font-size: 15px; letter-spacing: 2px; cursor: grab; }
+
+  /* Setup rows sit quieter than live controls */
+  .setuprow { display: flex; gap: 6px; margin-bottom: 8px; opacity: .72; }
+  .setuprow:focus-within { opacity: 1; }
+  .setuprow input, .setuprow select { padding: 7px; font-size: 12px; }
+  .setuprow button { padding: 7px 10px; font-size: 10px; }
+
+  /* ---------- Messages ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #454458; color: #f2f2f2; border-radius: 16px;
+    padding: 8px 12px; font-size: 11px; font-weight: 700; cursor: pointer;
+    letter-spacing: .04em; border: none; font-family: inherit; flex: 0 0 auto;
+    max-width: 100%;
+  }
+  .chip:hover { filter: brightness(1.15); }
+  .chip.on { background: #ffcc02; color: #111; }
+  .chip .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip .x { color: inherit; opacity: .5; font-size: 15px; line-height: 1; padding: 4px 2px 4px 6px; }
+  .chip .x:hover { opacity: 1; }
+  .chip.add { background: #23222f; color: #9b9aad; }
+  #clearAllBtn { background: #3a3948; color: #6f6e80; }
+  #clearAllBtn.armed { background: #ff4d4f; color: #fff; }
+  /* Space is reserved even when idle, so the chips never slide out from under
+     your finger the moment a message goes to air. */
+  .onair {
+    font-size: 11px; color: #ffcc02; background: #332d14; border-radius: 7px;
+    padding: 8px 11px; margin-bottom: 8px; min-height: 30px; font-weight: 700;
+    letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    visibility: hidden;
+  }
+  .onair.show { visibility: visible; }
+
+  /* ---------- Modals ---------- */
+  #settingsModal, #cueModal, #askModal, #importModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+  }
+  #settingsModal.open, #cueModal.open, #askModal.open, #importModal.open { display: flex; }
+  /* Above the settings inspector, since it can be raised from inside it. */
+  #askModal { z-index: 14; }
+
+  /* CSV import */
+  .csvspec { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 12px; }
+  .csvspec td { padding: 4px 6px; border-bottom: 1px solid #35344a; vertical-align: top; }
+  .csvspec td:first-child {
+    width: 130px; color: #ffcc02; font-weight: 700; font-family: var(--mono, monospace);
+  }
+  .csvspec td:last-child { color: #9b9aad; }
+  .csvpreview { max-height: 190px; overflow: auto; }
+  .csvrow {
+    display: flex; gap: 8px; align-items: center; font-size: 12px;
+    padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; background: #23222f;
+  }
+  .csvrow.bad { background: #3a1214; }
+  .csvrow .n { color: #6f6e80; width: 20px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .csvrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .csvrow .dt { color: #9b9aad; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .csvrow .err { color: #ff8f90; font-size: 11px; flex: 1; }
+  .panel {
+    background: #2c2b3b; border: 1px solid #454458; border-radius: 12px;
+    padding: 22px; width: 540px; max-height: 88vh; overflow: auto;
+  }
+  .panel h2 { font-size: 12px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: #ffcc02; margin-bottom: 14px; }
+  .crow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .crow > label { flex: 1; margin-bottom: 0; }
+  .crow input[type="color"] { flex: 0 0 52px; height: 34px; padding: 2px; border: 1px solid #454458; border-radius: 8px; background: #23222f; cursor: pointer; }
+  .crow input[type="range"] { flex: 0 0 160px; }
+  .crow select, .crow input[type="number"] { flex: 0 0 160px; }
+  .crow input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; accent-color: #ffcc02; }
+  .crow .val { flex: 0 0 44px; font-size: 12px; color: #9b9aad; text-align: right; }
+  .crow input[type="file"] { display: none; }
+  .logo-thumb { flex: 0 0 auto; max-height: 30px; max-width: 90px; border-radius: 4px; background: #111; padding: 2px; }
+  .keychip {
+    flex: 0 0 auto; min-width: 64px; text-align: center; font-size: 12px; font-weight: 700;
+    background: #111; border: 1px solid #454458; border-radius: 6px; padding: 7px 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .keychip.listening { border-color: #ffcc02; color: #ffcc02; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 260px; }
+  .swatch { width: 24px; height: 24px; border-radius: 6px; cursor: pointer; border: 1px solid #454458; }
+  .swatch.sel { outline: 2px solid #fff; }
+  .swatch.none { background: repeating-linear-gradient(45deg, #23222f, #23222f 4px, #454458 4px, #454458 6px); }
+
+  /* ---------- Top bar menu ---------- */
+  .menuwrap { position: relative; }
+  .menu {
+    display: none; position: absolute; top: calc(100% + 5px); right: 0; min-width: 220px;
+    background: #23222f; border: 1px solid #454458; border-radius: 10px;
+    padding: 6px; z-index: 12;
+  }
+  .menu.open { display: block; }
+  .mi {
+    display: block; width: 100%; text-align: left; background: transparent;
+    color: #f2f2f2; font-size: 12px; padding: 12px 12px; border-radius: 7px;
+    text-transform: none; letter-spacing: 0; font-weight: 600;
+  }
+  .mi:hover { background: #2f2e3d; filter: none; }
+  .mi.on { color: #3ddc84; }
+  .misep { height: 1px; background: #35344a; margin: 5px 4px; }
+
+  /* Lock state. Green = safe to touch, amber = live and guarded. Amber is reserved
+     for warning-ish meaning now, so an unlocked rundown is the quiet state. */
+  .lockbtn.locked { background: #1d5c3a; color: #8ff0bd; }
+
+  /* ---------- Settings tabs ---------- */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid #454458; }
+  .tab { min-height: 40px;
+    flex: 0 0 auto; background: transparent; color: #9b9aad; font-size: 11px;
+    padding: 10px 12px; border-radius: 8px 8px 0 0; letter-spacing: .08em;
+  }
+  .tab:hover { background: #262532; filter: none; }
+  .tab.on { background: #23222f; color: #ffcc02; }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+
+  /* ---------- Network links ---------- */
+  .netlinks { font-size: 11px; color: #9b9aad; line-height: 1.6; }
+  .netlinks b { color: #f2f2f2; font-weight: 700; }
+  .netlinks .u {
+    display: inline-block; background: #23222f; border-radius: 5px;
+    padding: 2px 6px; margin: 1px 0; color: #ffcc02; cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .netlinks .u:hover { filter: brightness(1.25); }
+  .netlinks .warn { color: #ff8f90; }
+
+  /* ---------- Show lock ---------- */
+  /* Never on at launch. When locked, the rundown and presets become read-only: the
+     edit/delete affordances are gone rather than merely disabled, so there is nothing
+     to mis-hit next to Load and nothing to mis-hit inside a message chip. */
+  body.locked .cue .edit,
+  body.locked .cue .del,
+  body.locked .cue .load,
+  body.locked .cue .clear-on,
+  body.locked .chip .x,
+  body.locked #reorderBtn,
+  body.locked .setuprow { display: none; }
+  body.locked #cueList { margin-bottom: 0; }
+  .lockhint { font-size: 10px; color: #6f6e80; display: none; }
+  body.locked .lockhint { display: inline; }
+
+  /* Persistent flag whenever the clock speed is not 1.00x. The slider now lives in
+     Settings, so without this the show could be silently retimed with no evidence. */
+  .speedflag {
+    display: none; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 700; color: #111; background: #ffcc02; border-radius: 5px;
+    padding: 3px 7px; margin-left: 8px;
+  }
+  body.speedy .speedflag { display: inline-block; }
+
+  /* ---------- Simple mode ---------- */
+  /* Set a time, run it, put it on a screen. Everything cue-, message- and
+     schedule-related is hidden; the underlying data is untouched, so switching back
+     restores the lot. */
+  .simpleonly { display: none; }
+  body.simple .simpleonly { display: block; }
+  body.simple .col-right,
+  body.simple .schedwrap,
+  body.simple .nextbar,
+  body.simple #undoBtn,
+  body.simple #lockBtn,
+  body.simple .speedrow,
+  body.simple .mhead { display: none; }
+  /* Simple mode has no cue list, so a schedule strip has nothing to schedule. */
+  body.simple .schedwrap { display: none; }
+  body.simple .cols { grid-template-columns: minmax(0,1fr); }
+  /* With no cue list there is no "manual" to take — it's just the timer, so drop the
+     amber accent that would otherwise be on permanently. */
+  body.simple .manualblock { border-color: #454458; background: #262532; margin-top: 12px; }
+  body.simple .manualblock .mbody { opacity: 1; }
+  body.simple #modeBtn { background: #ffcc02; color: #111; }
+
+  /* ---------- Touch mode ---------- */
+  body.touch { padding: 18px 20px 20px; }
+  body.touch button { padding: 16px 12px; font-size: 14px; }
+  body.touch .small { padding: 12px 16px; font-size: 12px; }
+  body.touch .transport #startBtn { padding: 26px 8px; font-size: 18px; }
+  body.touch .transport .reset, body.touch .transport .quick { padding: 26px 8px; font-size: 14px; }
+  body.touch .adds button { padding: 16px 6px; font-size: 13px; }
+  body.touch #goBtn { padding: 20px 32px; font-size: 16px; }
+  body.touch .cue { padding: 12px 12px; margin-bottom: 8px; }
+  body.touch .cue button { padding: 11px 14px; font-size: 12px; }
+  body.touch .cue .name { font-size: 15px; }
+  body.touch .cue .dur { font-size: 14px; }
+  body.touch .chip { padding: 13px 18px; font-size: 13px; }
+  body.touch .chip .x { font-size: 16px; padding: 0 2px; }
+  body.touch input[type="number"], body.touch input[type="text"], body.touch select { padding: 14px; font-size: 17px; }
+  body.touch .setuprow { opacity: 1; }
+  body.touch .mbody #setManualBtn { flex: 0 0 92px; padding: 15px 8px; }
+  body.touch .popfield input[type="time"] { padding: 15px; font-size: 20px; }
+  body.touch .schedpop { padding: 18px; }
+  body.touch .setuprow input, body.touch .setuprow select { padding: 12px; font-size: 15px; }
+  body.touch .setuprow button { padding: 12px 14px; font-size: 12px; }
+  body.touch .crow input[type="checkbox"] { width: 26px; height: 26px; }
+  body.touch .swatch { width: 34px; height: 34px; }
+  body.touch .keychip { padding: 12px 14px; font-size: 14px; }
+  body.touch label { font-size: 10px; }
