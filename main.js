@@ -10,8 +10,10 @@ app.setName('StageCredit');
 
 const createServer = require('./server');
 const AsRun = require('./asrun');
+const presenterOverlay = require('./presenter-overlay');
 
 let controlWin = null;
+let presenter = null;
 let quitting = false;
 let server = null;
 let asrun = null;
@@ -244,6 +246,7 @@ function createWindows() {
       persistLive();
     }
     controlWin = null;
+    if (presenter) presenter.stop();
     VIEWS.forEach(v => { if (displayWins[v]) displayWins[v].close(); });
     // L6: stop is fire-and-forget here (window already gone); before-quit awaits.
     if (server) { server.stop().catch(() => {}); server = null; }
@@ -313,6 +316,7 @@ function handleControl(channel, handler) {
 onControl('timer-update', (_event, state) => {
   latestState = state;
   eachDisplay(w => w.webContents.send('timer-update', state));
+  if (presenter) presenter.pushState(state);
   if (server) server.pushState(state);
 });
 
@@ -321,12 +325,17 @@ onControl('timer-update', (_event, state) => {
 onControl('timer-settings', (_event, settings) => {
   latestSettings = settings;
   eachDisplay(w => w.webContents.send('timer-settings', settings));
+  if (presenter) presenter.pushSettings(settings);
   if (server) server.pushSettings(settings);
 });
 
 // A freshly loaded display window asks for the current picture rather than waiting.
 // Any window may request a snapshot (display or control).
 ipcMain.handle('request-snapshot', () => ({ state: latestState, settings: latestSettings }));
+
+handleControl('presenter-status', () => (
+  presenter ? presenter.status() : { platform: process.platform, enabled: false, attached: false, messagesInNotes: false }
+));
 
 // ---- Remote command relay (M7: request/response with applied status) ----
 let remoteSeq = 0;
@@ -598,6 +607,10 @@ app.whenReady().then(() => {
   });
 
   asrun = new AsRun(path.join(app.getPath('userData'), 'as-run.jsonl'));
+  presenter = presenterOverlay.start({
+    preload: DISPLAY_PRELOAD,
+    webPreferences: SECURE_WEB_PREFS
+  });
   createWindows();
   screen.on('display-removed', onDisplayRemoved);
 });
@@ -608,6 +621,7 @@ app.on('before-quit', (e) => {
     persistLive();
   }
   // L6: await server stop so LAN clients get a clean close
+  if (presenter) presenter.stop();
   if (server) {
     e.preventDefault();
     const s = server;

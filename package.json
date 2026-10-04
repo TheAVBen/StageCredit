@@ -1,11 +1,12 @@
 {
   "name": "stagecredit",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "StageCredit — stage timer by Sound Credit TV",
   "author": "Sound Credit TV",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test presenter-geometry.test.js",
     "dist": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:all": "electron-builder --mac --win"
@@ -34,7 +35,17 @@
       "remote.html",
       "remote-app.js",
       "remote.css",
+      "presenter-geometry.js",
+      "presenter-pane.js",
+      "presenter-win32.js",
+      "presenter-overlay.js",
+      "presenter-overlay.html",
+      "presenter-overlay.css",
+      "presenter-overlay-view.js",
       "fonts/**"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**/*"
     ],
     "mac": {
       "category": "public.app-category.utilities",
@@ -71,6 +82,7 @@
     }
   },
   "dependencies": {
+    "koffi": "^2.14.1",
     "ws": "^8.21.1"
   }
 }

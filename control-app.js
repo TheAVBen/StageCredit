@@ -66,7 +66,10 @@
     nextPos: 'bottom',
     nextScale: 1,
     brand: true,
-    logo: null
+    logo: null,
+    // PowerPoint presenter view, Windows. The audience slideshow is a different window.
+    pptOverlay: true,
+    pptMessagesInNotes: false
   };
   let settings = Object.assign({}, defaultSettings,
     JSON.parse(localStorage.getItem('displaySettings') || '{}'));
@@ -361,6 +364,13 @@
     return remaining <= at ? next.name : '';    // <= 0 keeps it up through overtime
   }
 
+  // Next cue on the PowerPoint panes. The audience "next up" switch does not apply here.
+  function nextCueName() {
+    if (simpleMode || activeCue < 0) return '';
+    const next = cues[activeCue + 1];
+    return next && next.name ? next.name : '';
+  }
+
   // The wire state: small, and sent many times a second. Deliberately excludes
   // settings — those go on their own channel only when they change, because the
   // custom logo is a base64 data URL up to 3MB and this used to ride along in every
@@ -385,6 +395,7 @@
       // showName flag — "next up" is opted into globally in Customise, so the
       // operator has already decided the audience-facing screen can show names.
       nextName: nextUpName(),
+      nextCue: nextCueName(),
       // context the remote and the API want, but the display ignores
       cueIndex: activeCue,
       cueName: cue ? cue.name : '',
@@ -2057,6 +2068,11 @@
     $('setNextScaleVal').textContent = Math.round((settings.nextScale != null ? settings.nextScale : 1) * 100) + '%';
     syncNextAtRow();
     $('setBrand').checked = settings.brand;
+    if ($('setPptOverlay')) {
+      $('setPptOverlay').checked = settings.pptOverlay !== false;
+      $('setPptMessages').checked = !!settings.pptMessagesInNotes;
+      syncPptRows();
+    }
     $('logoThumb').style.display = settings.logo ? 'block' : 'none';
     if (settings.logo) $('logoThumb').src = settings.logo;
   }
@@ -2153,6 +2169,40 @@
     settingChanged(true);
   });
   $('setBrand').addEventListener('change', () => { settings.brand = $('setBrand').checked; settingChanged(true); });
+
+  function syncPptRows() {
+    if (!$('setPptOverlay')) return;
+    $('setPptMessages').disabled = !$('setPptOverlay').checked;
+  }
+  function refreshPptStatus() {
+    const el = $('pptStatus');
+    if (!el || !window.timerAPI.presenterStatus) return;
+    window.timerAPI.presenterStatus().then(st => {
+      if (!st || st.platform !== 'win32') {
+        el.textContent = 'Saved with the show. The panes attach on the Windows machine running PowerPoint.';
+        return;
+      }
+      if (settings.pptOverlay === false) {
+        el.textContent = 'Overlay off.';
+        return;
+      }
+      el.textContent = st.attached
+        ? 'Presenter view connected.'
+        : 'Waiting for PowerPoint presenter view.';
+    }).catch(() => {});
+  }
+  if ($('setPptOverlay')) {
+    $('setPptOverlay').addEventListener('change', () => {
+      settings.pptOverlay = $('setPptOverlay').checked;
+      syncPptRows();
+      settingChanged(true);
+      refreshPptStatus();
+    });
+    $('setPptMessages').addEventListener('change', () => {
+      settings.pptMessagesInNotes = $('setPptMessages').checked;
+      settingChanged(true);
+    });
+  }
 
   $('logoPickBtn').addEventListener('click', () => $('setLogo').click());
   $('setLogo').addEventListener('change', () => {
@@ -2507,6 +2557,7 @@
   // L8: no redundant force-resync every second. Displays get join snapshots / requestSnapshot;
   // wire runs from tick+broadcast. Keep only wall-clock schedule ETAs and light net UI refresh.
   setInterval(() => {
+    refreshPptStatus();
     paintSchedule();
     if (netInfo && netInfo.running) {
       window.timerAPI.serverStatus().then(st => { netInfo = st; renderNet(); });

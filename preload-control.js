@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Full bridge for the control window only (privileged). Display uses preload-display.js.
 contextBridge.exposeInMainWorld('timerAPI', {
+  platform: process.platform,
+  presenterStatus: () => ipcRenderer.invoke('presenter-status'),
   sendUpdate: (state) => ipcRenderer.send('timer-update', state),
   sendSettings: (settings) => ipcRenderer.send('timer-settings', settings),
   sendCues: (cues) => ipcRenderer.send('cues-changed', cues),
