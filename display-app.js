@@ -86,8 +86,34 @@
 
   const brandEl = document.getElementById('brand');
   const logoEl = document.getElementById('logoImg');
-  let lastScale = null, lastFont = null;
+  const stageEl = document.getElementById('stage');
+  let lastScale = null, lastFont = null, lastFrame = null;
   let lastLogoKey = null;
+
+  // 1920×720 panel fed a 1920×1080 signal. The panel maps every input line onto
+  // the shorter screen, which squashes the picture. Lay the timer out on a
+  // 1920×720 canvas and stretch that canvas to the window; the panel's squash
+  // puts the proportions back. A window that is already 1920×720 gets scale 1.
+  function layoutFrame() {
+    if (!stageEl) return;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (w < 1 || h < 1) return;
+    if (!document.body.classList.contains('frame-720')) {
+      stageEl.style.height = '';
+      stageEl.style.transform = '';
+      return;
+    }
+    const designH = w * (720 / 1920);
+    stageEl.style.height = designH + 'px';
+    stageEl.style.transformOrigin = 'top center';
+    stageEl.style.transform = 'scaleY(' + (h / designH) + ')';
+  }
+  function frameIs720(s) {
+    const key = document.body.classList.contains('view-clock') ? 'clock' : 'presenter';
+    const f = s && s.frame;
+    return !!(f && f[key] === '720');
+  }
 
   // M12: normalize absolute vs relative logo URLs for comparison
   function logoKey(url) {
@@ -119,10 +145,13 @@
     document.body.classList.toggle('next-top', np === 'top');
     document.body.classList.toggle('next-bottom', np === 'bottom');
     r.setProperty('--font', s.font);
-    // scale and font both change the band's metrics — refit, but only on change,
-    // never on every update tick
-    if (s.scale !== lastScale || s.font !== lastFont) {
-      lastScale = s.scale; lastFont = s.font;
+    const frame720 = frameIs720(s);
+    document.body.classList.toggle('frame-720', frame720);
+    layoutFrame();
+    // scale, font and the unsquish canvas all change the band's metrics — refit,
+    // but only on change, never on every update tick
+    if (s.scale !== lastScale || s.font !== lastFont || frame720 !== lastFrame) {
+      lastScale = s.scale; lastFont = s.font; lastFrame = frame720;
       if (typeof fitMessage === 'function') fitMessage();
     }
     clock24 = !!s.clock24;
@@ -167,7 +196,7 @@
     msgEl.textContent = next;
     fitMessage();
   }
-  window.addEventListener('resize', fitMessage);
+  window.addEventListener('resize', () => { layoutFrame(); fitMessage(); });
   // The webfont arriving changes glyph metrics after we've already fitted, so refit
   // on swap too. Guarded — document.fonts is absent in no-webfont edge cases.
   if (document.fonts) {

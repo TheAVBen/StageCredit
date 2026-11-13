@@ -1,0 +1,137 @@
+/* Presenter-view panes. Sized with the container so a short band under the
+   slide and a tall notes column both fit the same markup. */
+* { margin: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; background: #111111; }
+body {
+  font-family: 'Montserrat', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #f2f2f2;
+  user-select: none;
+  cursor: none;
+}
+.stack {
+  container-type: size;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 3cqh 4cqw 4cqh;
+  gap: 0.35em;
+  font-size: clamp(11px, 9cqh, 42px);
+}
+.cue {
+  font-weight: 700;
+  font-size: 0.95em;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  line-height: 1.05;
+  opacity: .9;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sub {
+  font-weight: 600;
+  font-size: 0.62em;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  opacity: .5;
+  line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.time {
+  font-weight: 800;
+  font-size: 3.5em;
+  line-height: .84;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  max-width: 100%;
+}
+body.clock-only .time { font-size: 4.4em; }
+.msg {
+  font-weight: 800;
+  font-size: 1.05em;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: #ffcc02;
+  line-height: 1.05;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.next {
+  font-weight: 700;
+  font-size: 0.72em;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  opacity: .45;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.next .lab { font-weight: 600; opacity: .75; margin-right: .5em; }
+.paused {
+  position: absolute;
+  top: 8%;
+  right: 5%;
+  font-size: clamp(9px, 4.5cqh, 18px);
+  font-weight: 600;
+  letter-spacing: .16em;
+  color: #8b93a7;
+}
+.empty {
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: #6a6978;
+}
+.wordmark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4%;
+  font-weight: 700;
+  font-size: clamp(10px, 3.2cqh, 16px);
+  letter-spacing: -.01em;
+  line-height: 1.15;
+  text-transform: lowercase;
+  color: #4a495e;
+}
+.wordmark .tv {
+  font-size: .5em;
+  vertical-align: .75em;
+  font-weight: 800;
+  letter-spacing: 0;
+  color: #ffcc02;
+}
+
+body.notes .stack { justify-content: center; padding-bottom: 12cqh; }
+body.notes .msg {
+  font-size: clamp(18px, 11cqh, 72px);
+  white-space: normal;
+  line-height: 1.05;
+}
+body.notes .next {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: 12%;
+  font-size: clamp(12px, 4.5cqh, 28px);
+}
+
+body.blackout { background: #000 !important; }
+body.blackout .stack { visibility: hidden; }
+body.flash { animation: pptflash 0.5s steps(2) infinite; }
+@keyframes pptflash {
+  0% { background: var(--bg, #111111); }
+  50% { background: #7a0000; }
+}

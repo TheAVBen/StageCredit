@@ -7,6 +7,7 @@ Stage timer by [Sound Credit TV](https://soundcredit.tv). A control panel for th
 ## Features
 
 - **Two output views** — a presenter display (name, subtitle, messages, next up) and a stripped clock-only view for FOH or confidence, each fullscreen on any connected screen. Both remember where they were between launches
+- **PowerPoint presenter view (Windows)** — while presenter view is open, the cue and the clock sit under the current slide. Messages in notes, from Settings → Output, moves the message and the next cue into the notes column. PowerPoint notes stay visible until that is on. The audience slideshow is a different window and does not show the panes. Clicks pass through.
 - **Cue list** — named cues with drag-and-drop reordering and a full editor: countdown / count-up / time-of-day types, per-cue colours and background tints, speaker names shown on the display, per-cue warning thresholds, overtime rules (count up or hold at 0:00), auto-follow chaining, scheduled starts at a time of day, automatic wrap-up messages, and operator-only notes
 - **GO and arming** — GO loads and starts the next cue; digits 1–9 arm a cue without touching the output, so a stray keypress can't stop a live clock
 - **Messages** — one-off custom messages plus unlimited saved presets; send/clear from a single toggling button
@@ -91,7 +92,11 @@ Cue and preset numbers are **1-based**, matching the numbers shown down the cue 
 
 ## Versioning
 
-Bump `version` in `package.json` before building a release. Current: **1.0.2**.
+Bump `version` in `package.json` before building a release. Current: **1.0.3**.
+
+### 1.0.3
+
+- Windows PowerPoint presenter view. The clock sits under the current slide. Settings → Output → Messages in notes moves the message and the next cue into the notes column.
 
 ### 1.0.2
 
