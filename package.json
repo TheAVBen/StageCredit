@@ -50,6 +50,7 @@
     "mac": {
       "category": "public.app-category.utilities",
       "icon": "build/icon.png",
+      "x64ArchFiles": "**/koffi/**/*.node",
       "target": [
         {
           "target": "dmg",

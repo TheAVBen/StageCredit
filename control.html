@@ -332,6 +332,14 @@
           <button class="small" id="closeDispBtn" style="flex:1">Close</button>
         </div>
         <div class="popsum" id="viewState">&mdash;</div>
+        <label>Screen shape</label>
+        <div class="row">
+          <select id="frameSel" style="flex:1">
+            <option value="native">Normal</option>
+            <option value="720">1920×720 unsquish</option>
+          </select>
+        </div>
+        <div class="hint2">For a 1920×720 screen that is sent 1920×1080 and squashes the picture shorter. The timer is drawn at 1920×720 and stretched to fill the signal, so the squash puts the proportions back. Changes only the output selected above, and stays on this computer when a show is loaded.</div>
         <hr>
         <label>PowerPoint presenter view</label>
         <div class="crow"><label>Show the clock under the slide</label><input type="checkbox" id="setPptOverlay"></div>

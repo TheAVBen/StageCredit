@@ -67,12 +67,24 @@
     nextScale: 1,
     brand: true,
     logo: null,
+    // Per output. '720' draws that view for a 1920×720 panel fed a 1080p signal.
+    frame: { presenter: 'native', clock: 'native' },
     // PowerPoint presenter view, Windows. The audience slideshow is a different window.
     pptOverlay: true,
     pptMessagesInNotes: false
   };
+  // Screen shape is a property of this computer's outputs. Always a fresh object
+  // so it never aliases defaultSettings.frame.
+  function normaliseFrame(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+      presenter: src.presenter === '720' ? '720' : 'native',
+      clock: src.clock === '720' ? '720' : 'native'
+    };
+  }
   let settings = Object.assign({}, defaultSettings,
     JSON.parse(localStorage.getItem('displaySettings') || '{}'));
+  settings.frame = normaliseFrame(settings.frame);
   if (settings.logo) settings.logo = sanitiseLogo(settings.logo);
 
   function saveSettings() { localStorage.setItem('displaySettings', JSON.stringify(settings)); }
@@ -708,7 +720,13 @@
     cues = snap.cues.map(normaliseCue);
     presets = snap.presets.slice();
     activeCue = snap.activeCue < cues.length ? snap.activeCue : -1;
-    if (snap.settings) { settings = Object.assign({}, snap.settings); saveSettings(); pushSettings(); }
+    if (snap.settings) {
+      settings = Object.assign({}, snap.settings);
+      settings.frame = normaliseFrame(settings.frame);
+      saveSettings();
+      pushSettings();
+      syncFrameSel();
+    }
     if (snap.keymap) { keymap = Object.assign({}, snap.keymap); saveKeymap(); paintKeyHints(); }
     // Only wholesale snapshots carry a plan; ordinary edits leave it alone.
     if (snap.plannedStart !== undefined) {
@@ -1342,9 +1360,23 @@
     window.timerAPI.closeDisplay(curView());
     setTimeout(refreshViewState, 300);
   });
-  $('viewSel').addEventListener('change', refreshViewState);
+  $('viewSel').addEventListener('change', () => { syncFrameSel(); refreshViewState(); });
+
+  function syncFrameSel() {
+    const sel = $('frameSel');
+    if (!sel) return;
+    const mode = settings.frame && settings.frame[curView()] === '720' ? '720' : 'native';
+    sel.value = mode;
+  }
+  $('frameSel').addEventListener('change', () => {
+    const v = curView();
+    settings.frame = normaliseFrame(settings.frame);
+    settings.frame[v] = $('frameSel').value === '720' ? '720' : 'native';
+    settingChanged(true);
+  });
 
   async function refreshViewState() {
+    syncFrameSel();
     outOpen = await window.timerAPI.displayWindows();
     updateOutStatus();
     const v = curView();
@@ -2236,8 +2268,10 @@
   });
 
   $('setDefaultsBtn').addEventListener('click', () => {
-    settings = Object.assign({}, defaultSettings);
+    const frame = normaliseFrame(settings.frame);
+    settings = Object.assign({}, defaultSettings, { frame });
     populateSettingsForm();
+    syncFrameSel();
     settingChanged(true);
   });
 
@@ -2421,13 +2455,16 @@
 
   // ---- Show files: save / load / new ----
   function gatherShow() {
+    // Screen shape belongs to this computer's outputs, not the show.
+    const showSettings = Object.assign({}, settings);
+    delete showSettings.frame;
     return {
       app: 'StageCredit',
       version: 1,
       saved: new Date().toISOString(),
       cues,
       presets,
-      settings,
+      settings: showSettings,
       keymap,
       // The plan belongs to the show, not the machine. Without these, a show file
       // opened on the venue rig inherited whatever times were last used on it and
@@ -2456,7 +2493,8 @@
       msgSource = null;
       cues = (data.cues || []).map(normaliseCue);
       presets = Array.isArray(data.presets) ? data.presets.filter(p => p && p.trim()) : defaultPresets.slice();
-      settings = Object.assign({}, defaultSettings, data.settings || {});
+      const frame = normaliseFrame(settings.frame);
+      settings = Object.assign({}, defaultSettings, data.settings || {}, { frame });
       if (settings.logo) settings.logo = sanitiseLogo(settings.logo);
       keymap = Object.assign({}, defaultKeymap, data.keymap || {});
       // Absent in a file means "no plan", not "keep the last one" — otherwise New Show
@@ -2471,6 +2509,7 @@
       saveKeymap();
       saveSchedule();
       pushSettings();
+      syncFrameSel();
       setFromInputs();
       syncSchedInputs();
       renderCues();
